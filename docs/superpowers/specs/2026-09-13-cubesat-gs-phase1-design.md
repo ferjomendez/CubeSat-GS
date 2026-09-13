@@ -353,7 +353,7 @@ refuse if another command is pending (`CommandBusyError`); refuse if
 1..max_retries+1: build packet, `serial.send_tx`, start timer, `bus.wait_for(
 PacketReceived, lambda e: parsed apid == response_apid, timeout)`. Success →
 `responded`, latency = response ts − TX ack ts. Timeout → sleep
-`retry_backoff ** (attempt-1)` s, retry. Exhausted → `timeout`. Serial errors
+`retry_backoff ** attempt` s, retry (so the first retry delay already scales with the configured multiplier). Exhausted → `timeout`. Serial errors
 → `failed`. Commands with `response_apid: null` complete as `acked` after
 `TX_DONE`. Every record appended to history and published as
 `CommandCompleted`. `send_raw` sends the hex bytes verbatim (no CCSDS
