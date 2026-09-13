@@ -73,7 +73,7 @@ async def _main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
     st = Storage(EventBus(), cfg.database, cfg.base_dir.parent, sync_interval=10_000)
-    await st.start()
+    await st.start(create_session=False)
     try:
         n = await export(st, a.collection, a.output, fmt="json" if a.output.endswith(".json") else "csv",
                          start=_parse_dt(a.start), end=_parse_dt(a.end), apid=a.apid)

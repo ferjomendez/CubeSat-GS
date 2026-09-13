@@ -18,7 +18,7 @@ def _t(m=0):
 async def st(tmp_path):
     cfg = DatabaseConfig(local_fallback_path=str(tmp_path / "gs.db"))
     s = Storage(EventBus(), cfg, tmp_path, sync_interval=1000)
-    await s.start()
+    await s.start(create_session=False)
     for i in range(3):
         await s.write("raw_packets", {"timestamp": _t(i), "direction": "rx", "frequency_mhz": 437.25,
                                       "raw_hex": f"0{i}", "rssi": None, "snr": None, "crc_valid": True,
@@ -46,6 +46,12 @@ async def test_export_json_with_filters(st, tmp_path):
     assert isinstance(data, list) and data[0]["raw_hex"] == "01"
     n = await export(st, "raw_packets", out, fmt="json", apid=999)
     assert n == 0 and json.loads(out.read_text(encoding="utf-8")) == []
+
+
+async def test_no_session_row_created(st):
+    """F6: a read-only exporter Storage must not write a junk session row."""
+    stats = await st.stats()
+    assert stats["sessions"] == 0
 
 
 async def test_bad_args(st, tmp_path):

@@ -49,6 +49,7 @@ async def test_sqlite_only_flow(tmp_path):
 
     h = await st.health()
     assert h["mongo"] == "disabled" and h["pending_sync"] == 0
+    assert st.state == "disabled"
     raw = await st.query("raw_packets")
     assert len(raw) == 2
     rx = [r for r in raw if r["direction"] == "rx"][0]
@@ -91,6 +92,7 @@ async def test_mongo_primary_then_fallback_then_sync(tmp_path):
                  mongo_client_factory=lambda uri: client, sync_interval=1000)
     await st.start()
     assert (await st.health())["mongo"] == "ok"
+    assert st.state == "ok"
 
     src1 = PacketReceived(raw=BEACON, rssi=None, snr=None, freq_mhz=437.25)
     bus.publish(src1); bus.publish(_decoded(src1))
@@ -104,6 +106,7 @@ async def test_mongo_primary_then_fallback_then_sync(tmp_path):
     await _settle()
     h = await st.health()
     assert h["mongo"] == "degraded" and h["pending_sync"] == 2
+    assert st.state == "degraded"
     assert len(client["cubesat_gs"]["raw_packets"].docs) == 1
     local_raw = await st._sqlite.query("raw_packets")
     local_dec = await st._sqlite.query("decoded_telemetry")

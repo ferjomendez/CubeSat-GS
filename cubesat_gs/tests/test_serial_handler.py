@@ -184,6 +184,13 @@ async def test_ack_and_eof_in_same_step_does_not_wedge(stack):
     assert [e.connected for e in col.of(ConnectionChanged)] == [True, False, True]
 
 
+async def test_submit_after_stop_raises_immediately(stack):
+    bus, sim, ser, h, col = stack
+    await h.stop()
+    with pytest.raises(SerialDisconnected):
+        await asyncio.wait_for(h.set_frequency(437.25), 1.0)
+
+
 async def test_open_failure_retries():
     bus = EventBus()
     sim = ModemSimulator(beacon_interval=1000)

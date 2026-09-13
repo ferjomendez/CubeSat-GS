@@ -73,7 +73,6 @@ class GroundStation:
             "serial": {"connected": self.serial.connected, "port": self.serial.port},
             "frequency": {"mode": self.freq.mode.value, "mhz": self.freq.mhz},
             "pending_command": self.telecommand.pending.as_dict() if self.telecommand.pending else None,
-            "storage": {"mongo": "disabled" if self.storage._mongo is None
-                        else ("degraded" if self.storage._degraded else "ok")},
+            "storage": {"mongo": self.storage.state},
             "session": dict(self.storage.session),
         }

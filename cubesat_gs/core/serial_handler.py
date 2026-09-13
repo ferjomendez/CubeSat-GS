@@ -139,9 +139,17 @@ class SerialHandler:
 
     # ---- command queue
     async def _submit(self, line: str, ack_kind: str, timeout: float) -> None:
+        if self._stopping:
+            raise SerialDisconnected("handler stopped")
         loop = asyncio.get_running_loop()
         cmd = _Cmd(line, ack_kind, timeout, loop.create_future(), loop.create_future())
         await self._queue.put(cmd)
+        if self._stopping and not cmd.done.done():
+            # stop() may have already drained the queue before this cmd was put onto it;
+            # nothing will ever consume it now, so it would otherwise hang forever.
+            exc = SerialDisconnected("handler stopped")
+            cmd.done.set_exception(exc)
+            raise exc
         await cmd.done
 
     async def _writer_loop(self, writer) -> None:

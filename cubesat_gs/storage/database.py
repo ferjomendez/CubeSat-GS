@@ -58,7 +58,7 @@ class Storage:
         self._session_ref: Ref | None = None
 
     # ---- lifecycle
-    async def start(self) -> None:
+    async def start(self, *, create_session: bool = True) -> None:
         await self._sqlite.connect()
         if self._mongo is None:
             purged = await self._sqlite.purge_older_than(self._cfg.retention_days)
@@ -78,12 +78,13 @@ class Storage:
             self._tasks.append(asyncio.create_task(self._sync_loop(), name="storage-sync"))
         else:
             log.info("mongo: MONGO_URI not set; SQLite only")
-        self.session = {"start_time": now(), "end_time": None, "pass_id": None,
-                        "packets_received": 0, "packets_sent": 0, "notes": ""}
-        self._session_ref = await self.write("sessions", dict(self.session))
-        self._tasks.append(asyncio.create_task(self._session_flush_loop(), name="storage-session"))
-        for et, h in self._handlers():
-            self._bus.subscribe(et, h)
+        if create_session:
+            self.session = {"start_time": now(), "end_time": None, "pass_id": None,
+                            "packets_received": 0, "packets_sent": 0, "notes": ""}
+            self._session_ref = await self.write("sessions", dict(self.session))
+            self._tasks.append(asyncio.create_task(self._session_flush_loop(), name="storage-session"))
+            for et, h in self._handlers():
+                self._bus.subscribe(et, h)
 
     async def stop(self) -> None:
         for et, h in self._handlers():
@@ -150,16 +151,19 @@ class Storage:
     async def stats(self) -> dict[str, int]:
         return {c: await self._reads.count(c) for c in COLLECTIONS}
 
+    @property
+    def state(self) -> str:
+        """Synchronous view of Mongo connectivity: "disabled" | "degraded" | "ok"."""
+        if self._mongo is None:
+            return "disabled"
+        return "degraded" if self._degraded else "ok"
+
     async def health(self) -> dict[str, Any]:
         pending = 0
         if self._mongo is not None:
             for c in COLLECTIONS:
                 pending += await self._sqlite.count_unsynced(c)
-        if self._mongo is None:
-            mongo = "disabled"
-        else:
-            mongo = "degraded" if self._degraded else "ok"
-        return {"mongo": mongo, "pending_sync": pending, "sqlite_path": str(self._sqlite.path)}
+        return {"mongo": self.state, "pending_sync": pending, "sqlite_path": str(self._sqlite.path)}
 
     # ---- packet id correlation
     def packet_ref(self, source: PacketReceived) -> asyncio.Future:
