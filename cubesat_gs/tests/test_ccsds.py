@@ -104,3 +104,56 @@ def test_build_rejects_out_of_range():
 def test_peek_apid_seq():
     assert ccsds.peek_apid_seq(bytes.fromhex(PONG_HEX)) == (101, 1)
     assert ccsds.peek_apid_seq(b"\x00") is None
+
+
+# ---- Task 4: PacketBuilder and SequenceTracker
+
+from cubesat_gs.core.ccsds import PacketBuilder, SequenceTracker
+
+
+def _pkt(apid, seq):
+    return parse(build(apid, b"x", sequence_count=seq, packet_type=0))
+
+
+def test_packet_builder_counts_per_apid_and_wraps():
+    b = PacketBuilder(length_includes_crc=True)
+    assert parse(b.build(100, b"a")).sequence_count == 0
+    assert parse(b.build(100, b"a")).sequence_count == 1
+    assert parse(b.build(7, b"a")).sequence_count == 0  # independent counter
+    b._counters[100] = 0x3FFF
+    assert parse(b.build(100, b"a")).sequence_count == 0x3FFF
+    assert parse(b.build(100, b"a")).sequence_count == 0
+    assert b.next_count(7) == 1
+
+
+def test_tracker_global_scope_obc_interleaving():
+    t = SequenceTracker("global")
+    assert t.observe(_pkt(10, 0)) is None
+    assert t.observe(_pkt(101, 1)) is None   # different APID, same global counter: no gap
+    assert t.observe(_pkt(10, 2)) is None
+    assert t.observe(_pkt(10, 5)) == 2       # 3 and 4 missed
+
+
+def test_tracker_per_apid_scope():
+    t = SequenceTracker("per_apid")
+    assert t.observe(_pkt(10, 0)) is None
+    assert t.observe(_pkt(101, 0)) is None
+    assert t.observe(_pkt(10, 1)) is None
+    assert t.observe(_pkt(101, 3)) == 2
+
+
+def test_tracker_wraparound():
+    t = SequenceTracker("global")
+    t.observe(_pkt(10, 0x3FFE))
+    assert t.observe(_pkt(10, 0x3FFF)) is None
+    assert t.observe(_pkt(10, 0)) is None
+    assert t.observe(_pkt(10, 2)) == 1
+
+
+def test_tracker_duplicate_or_backwards_is_not_a_gap():
+    t = SequenceTracker("global")
+    t.observe(_pkt(10, 5))
+    assert t.observe(_pkt(10, 5)) is None
+    assert t.observe(_pkt(10, 3)) is None
+    t.reset()
+    assert t.observe(_pkt(10, 9)) is None

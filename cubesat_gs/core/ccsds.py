@@ -125,3 +125,48 @@ def peek_apid_seq(raw: bytes) -> tuple[int, int] | None:
     w0 = int.from_bytes(raw[0:2], "big")
     w1 = int.from_bytes(raw[2:4], "big")
     return w0 & _MAX_APID, w1 & _MAX_SEQ
+
+
+# ---------------------------------------------------------------- TX counters / RX gap detection
+
+class PacketBuilder:
+    """Builds packets with a per-APID 14-bit sequence counter (CCSDS standard for the GS side)."""
+
+    def __init__(self, length_includes_crc: bool = True) -> None:
+        self._length_includes_crc = length_includes_crc
+        self._counters: dict[int, int] = {}
+
+    def next_count(self, apid: int) -> int:
+        return self._counters.get(apid, 0)
+
+    def build(self, apid: int, payload: bytes, packet_type: int = 1) -> bytes:
+        seq = self._counters.get(apid, 0)
+        raw = build(apid, payload, sequence_count=seq, packet_type=packet_type,
+                    length_includes_crc=self._length_includes_crc)
+        self._counters[apid] = (seq + 1) & _MAX_SEQ
+        return raw
+
+
+class SequenceTracker:
+    """Detects missed downlink packets. scope='global' = one counter for all APIDs (current OBC)."""
+
+    def __init__(self, scope: Literal["global", "per_apid"] = "global") -> None:
+        if scope not in ("global", "per_apid"):
+            raise ValueError(f"invalid sequence scope {scope!r}")
+        self._scope = scope
+        self._last: dict[int | None, int] = {}
+
+    def reset(self) -> None:
+        self._last.clear()
+
+    def observe(self, packet: CCSDSPacket) -> int | None:
+        key = packet.apid if self._scope == "per_apid" else None
+        last = self._last.get(key)
+        self._last[key] = packet.sequence_count
+        if last is None:
+            return None
+        delta = (packet.sequence_count - last) & _MAX_SEQ
+        # delta 1 = in order; 0 = duplicate; large delta (> half range) = out of order / reset
+        if delta <= 1 or delta > _MAX_SEQ // 2:
+            return None
+        return delta - 1
