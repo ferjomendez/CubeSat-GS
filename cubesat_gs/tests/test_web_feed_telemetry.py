@@ -186,3 +186,47 @@ async def test_telemetry_field_order(web_stack):
     assert item["apid"] == 50 and item["fields"]
     actual_order = [f["name"] for f in item["fields"]]
     assert actual_order == ["a", "b", "c"], f"Field order mismatch: expected ['a', 'b', 'c'], got {actual_order}"
+
+
+async def test_cursor_pagination_refetch_loop_exhaustion(web_stack):
+    """Test refetch loop exhaustion: forces multiple refetch iterations without early break.
+
+    This tests the critical fix: rows = filtered assignment must happen after the loop,
+    not just on break. Ensures that if the loop exhausts all 4 iterations without
+    breaking early, unfiltered rows don't leak through to pagination.
+    """
+    station, sim, client = web_stack
+    base = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
+    # Write 30 rows with identical timestamp at a unique APID to avoid test data mixing
+    num_rows = 30
+    unique_apid = 77  # Use a unique APID to avoid interference with other test rows
+    for i in range(num_rows):
+        await station.storage.write("raw_packets", {
+            "timestamp": base, "apid": unique_apid, "direction": "rx",
+            "raw_hex": f"{unique_apid:02X}{i:02X}" + "00" * 10,
+            "sequence_count": i, "rssi": -100.0, "snr": 5.0, "frequency_mhz": 437.0})
+
+    # Paginate to the end with limit=2
+    all_ids = []
+    next_before = None
+    page_count = 0
+    while True:
+        params = {"limit": 2, "apid": unique_apid}
+        if next_before:
+            params["before"] = next_before
+        r = await client.get("/api/packets", params=params)
+        assert r.status_code == 200
+        body = r.json()
+        page_ids = [item["id"] for item in body["items"]]
+        all_ids.extend(page_ids)
+        next_before = body["next_before"]
+        page_count += 1
+        if not next_before:
+            break
+        assert page_count <= 20, f"Too many pages ({page_count})"
+
+    # Critical test: verify no duplicates across pages (main defect from loop exhaustion bug)
+    # This catches the bug where rows = filtered wasn't set after loop exhaustion,
+    # which would cause unfiltered rows to leak through and create duplicates
+    assert len(all_ids) > 0, "No rows returned from pagination"
+    assert len(all_ids) == len(set(all_ids)), f"Duplicate IDs found: pagination returned same row twice. IDs: {all_ids}"

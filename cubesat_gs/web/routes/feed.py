@@ -52,7 +52,7 @@ async def list_packets(station: GroundStation = Depends(get_station),
 
     # Bounded refetch loop: fetch until we have enough filtered rows
     fetch_limit = limit + 1
-    rows = []
+    filtered = []
     for refetch_iter in range(4):  # cap at 4 iterations (max ~4096 rows)
         rows = await station.storage.query("raw_packets", start=start, end=q_end, apid=apid, limit=fetch_limit)
 
@@ -64,12 +64,13 @@ async def list_packets(station: GroundStation = Depends(get_station),
 
         # If we have enough filtered rows, or the database returned fewer than requested, stop
         if len(filtered) > limit or len(rows) < fetch_limit:
-            rows = filtered
             break
 
         # Otherwise, double the fetch limit and try again
         fetch_limit = min(fetch_limit * 2, 4096)
 
+    # Use filtered rows from whichever iteration we broke on (or the last iteration if all 4 ran)
+    rows = filtered
     raw_page = rows[:limit]
     # Check if there are more rows beyond this page (before direction/kind filtering)
     has_more = len(rows) > limit
