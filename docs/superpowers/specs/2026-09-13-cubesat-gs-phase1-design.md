@@ -402,9 +402,13 @@ Backends:
   `timestamp` of raw_packets and decoded_telemetry. `insert(collection, doc)
   -> id`, `insert_many`.
 - `SQLiteBackend` (aiosqlite, WAL mode). Same five tables with `id INTEGER
-  PRIMARY KEY`, `synced INTEGER DEFAULT 0`, `mongo_id TEXT`. Non-scalar
-  values JSON-encoded. Retention: on start, delete rows older than
-  `retention_days` that are already synced (never delete unsynced rows).
+  PRIMARY KEY`, `synced INTEGER DEFAULT 0`, `mongo_id TEXT`, `sync_key TEXT`
+  (a `uuid4` assigned on every insert; see below). Non-scalar values
+  JSON-encoded. Retention: with Mongo enabled, on start delete rows older
+  than `retention_days` that are already synced (never delete unsynced
+  rows); with `MONGO_URI` unset nothing is ever marked synced, so on start
+  instead delete rows older than `retention_days` regardless of sync state
+  (there is no Atlas copy to lose).
 
 `Storage` routing:
 
@@ -412,10 +416,16 @@ Backends:
 - `mongo_uri` set → write to Mongo; on `PyMongoError` write to SQLite
   (`synced=0`), set `degraded=True`, log once per outage. Sync task every
   30 s: ping; if ok, upload unsynced rows oldest-first in batches of 200 via
-  `insert_many(ordered=True)`, store returned ids in `mongo_id`, mark synced.
+  `insert_many(ordered=False)`, store returned ids in `mongo_id`, mark synced.
   `decoded_telemetry.packet_id`/`alarms.packet_id` referencing a SQLite raw
   packet id are remapped to that row's `mongo_id` during sync (raw packets are
-  synced first, so the mapping always exists).
+  synced first, so the mapping always exists). Idempotency: each row's
+  `sync_key` is uploaded with it and enforced as a sparse unique index in
+  Mongo, so a batch re-uploaded after a partial failure (e.g. a crash between
+  `insert_many` succeeding and `mark_synced` running) is a no-op — on
+  `BulkWriteError` each row is resolved individually by `sync_key` (existing
+  doc's id if already present, otherwise a fresh `insert`) before marking
+  synced.
 - Session doc created at `start()` (SQLite first, mirrored to Mongo), counters
   updated in memory and written at `stop()` plus every 60 s.
 
@@ -423,10 +433,13 @@ Subscriptions: `PacketReceived`, `PacketSent` → raw_packets (apid/seq from a
 best-effort header parse, `None` if malformed); `PacketDecoded` → one
 decoded_telemetry row per field; `AlarmRaised` → alarms; `CommandCompleted`
 → commands. `packet_id` correlation: `PacketDecoded`/`AlarmRaised` carry the
-originating `PacketReceived` event as `source`; Storage keeps a bounded
-`{id(source): packet_id}` map (1000 entries). Because the bus schedules
-handlers as tasks, the raw insert is awaited before the decoded insert by
-keying on a per-source `asyncio.Future` for the packet id.
+originating `PacketReceived` event as `source`; Storage keeps a bounded map
+(1000 entries) from the source event (held strongly) to a Future resolved
+with the raw packet's `(backend, id)`. Because the bus schedules handlers as
+tasks, the decoded/alarm insert awaits that Future rather than `id(source)`
+directly — keying on the raw `id()` would be unsafe, since CPython can reuse
+the address of a freed `PacketReceived` and collide with an unrelated
+packet's entry.
 
 ### 3.11 `storage/exporter.py`
 
