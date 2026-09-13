@@ -77,6 +77,8 @@ class MongoBackend:
     async def ensure_indexes(self) -> None:
         for c in COLLECTIONS:
             await self._db[c].create_index([(time_field(c), DESCENDING)])
+            await self._db[c].create_index([("sync_key", ASCENDING)], unique=True, sparse=True,
+                                           name="uniq_sync_key")
         for c in _APID_COLLECTIONS:
             await self._db[c].create_index([("apid", ASCENDING)])
             await self._db[c].create_index([("apid", ASCENDING), ("timestamp", ASCENDING)])
@@ -90,14 +92,18 @@ class MongoBackend:
         res = await self._db[_check(collection)].insert_one(to_bsonable(doc))
         return str(res.inserted_id)
 
-    async def insert_many(self, collection: str, docs: list[dict]) -> list[str]:
+    async def insert_many(self, collection: str, docs: list[dict], *, ordered: bool = True) -> list[str]:
         if not docs:
             return []
-        res = await self._db[_check(collection)].insert_many([to_bsonable(d) for d in docs], ordered=True)
+        res = await self._db[_check(collection)].insert_many([to_bsonable(d) for d in docs], ordered=ordered)
         return [str(i) for i in res.inserted_ids]
 
     async def update(self, collection: str, id: str, fields: dict) -> None:
         await self._db[_check(collection)].update_one({"_id": ObjectId(id)}, {"$set": to_bsonable(fields)})
+
+    async def find_id_by_sync_key(self, collection: str, key: str) -> str | None:
+        doc = await self._db[_check(collection)].find_one({"sync_key": key}, {"_id": 1})
+        return str(doc["_id"]) if doc else None
 
     # ---- reads
     @staticmethod

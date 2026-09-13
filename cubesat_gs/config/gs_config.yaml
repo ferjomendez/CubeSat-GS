@@ -47,6 +47,8 @@ web:
 database:
   # MONGO_URI is read from the environment variable, NOT from this file
   db_name: "cubesat_gs"
+  # with MONGO_URI unset, local rows older than this are deleted; with Mongo, only rows
+  # already synced are deleted locally
   retention_days: 365
   local_fallback_path: "data/gs_offline.db"
 

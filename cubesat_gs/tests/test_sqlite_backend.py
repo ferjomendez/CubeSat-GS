@@ -60,9 +60,11 @@ async def test_sync_bookkeeping(db):
     ids = await db.insert_many("alarms", [{"timestamp": _t(i), "apid": 5, "v": i} for i in range(3)])
     assert ids == ["1", "2", "3"]
     pending = await db.unsynced("alarms", limit=2)
-    assert [i for i, _ in pending] == [1, 2] and pending[0][1]["v"] == 0
+    assert [i for i, _, _ in pending] == [1, 2] and pending[0][1]["v"] == 0
+    assert all(isinstance(key, str) and key for _, _, key in pending)  # sync_key populated
+    assert pending[0][2] != pending[1][2]  # distinct per row
     await db.mark_synced("alarms", [1, 2], ["aaa", "bbb"])
-    assert [i for i, _ in await db.unsynced("alarms", limit=10)] == [3]
+    assert [i for i, _, _ in await db.unsynced("alarms", limit=10)] == [3]
     assert await db.mongo_id_for("alarms", 2) == "bbb"
     assert await db.mongo_id_for("alarms", 3) is None
     assert await db.count_unsynced("alarms") == 1
@@ -77,6 +79,15 @@ async def test_purge_only_synced_old_rows(db):
     await db.mark_synced("raw_packets", [int(a), int(c)], ["x", "y"])
     assert await db.purge_synced_older_than(365) == 1
     assert {r["id"] for r in await db.query("raw_packets")} == {b, c}
+
+
+async def test_purge_older_than_ignores_synced_flag(db):
+    """F2: with Mongo disabled, retention must delete old rows regardless of sync state."""
+    old = datetime.now(timezone.utc) - timedelta(days=400)
+    a = await db.insert("raw_packets", {"timestamp": old, "apid": 1})  # old, never synced
+    b = await db.insert("raw_packets", {"timestamp": datetime.now(timezone.utc), "apid": 1})  # recent
+    assert await db.purge_older_than(365) == 1
+    assert {r["id"] for r in await db.query("raw_packets")} == {b}
 
 
 async def test_unknown_collection_rejected(db):

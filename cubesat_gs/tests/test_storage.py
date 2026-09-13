@@ -167,3 +167,36 @@ async def test_packet_ids_are_distinct_across_many_packets(tmp_path):
     # decoded rows are inserted in the same order as raw rows, so the pairing must match 1:1 in order
     assert [d["packet_id"] for d in reversed(decoded)] == list(reversed(raw_ids))
     await st.stop()
+
+
+# ---- F3: sync must be idempotent after a partial batch upload
+
+async def test_sync_is_idempotent_after_partial_batch(tmp_path):
+    bus = EventBus()
+    client = FakeMotorClient()
+    st = Storage(bus, _cfg(tmp_path, uri="mongodb://fake"), tmp_path,
+                 mongo_client_factory=lambda uri: client, sync_interval=1000)
+    await st.start()  # mongo up: connect() runs ensure_indexes(), registering the unique sync_key index
+
+    client.fail = True  # Atlas goes away; the next 3 raw packets buffer to SQLite
+    for _ in range(3):
+        bus.publish(PacketReceived(raw=BEACON, rssi=None, snr=None, freq_mhz=437.25))
+    await _settle()
+    h = await st.health()
+    assert h["mongo"] == "degraded" and h["pending_sync"] == 3
+
+    rows = await st._sqlite.unsynced("raw_packets", 10)
+    assert len(rows) == 3
+    first_id, first_doc, first_key = rows[0]
+    first_doc = dict(first_doc, sync_key=first_key)
+    client.fail = False  # Atlas is reachable again
+    # Simulate a previous sync that uploaded the first row to Atlas but crashed before
+    # SQLite could be marked synced (a partial insert_many).
+    await client["cubesat_gs"]["raw_packets"].insert_one(first_doc)
+
+    await st.sync_now()
+    mongo_raw = client["cubesat_gs"]["raw_packets"].docs
+    assert len(mongo_raw) == 3  # no duplicate created for the pre-uploaded row
+    h = await st.health()
+    assert h["pending_sync"] == 0
+    await st.stop()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -21,7 +22,8 @@ CREATE TABLE IF NOT EXISTS {t} (
     apid INTEGER,
     doc TEXT NOT NULL,
     synced INTEGER NOT NULL DEFAULT 0,
-    mongo_id TEXT
+    mongo_id TEXT,
+    sync_key TEXT
 );
 CREATE INDEX IF NOT EXISTS {t}_ts ON {t}(ts);
 CREATE INDEX IF NOT EXISTS {t}_apid_ts ON {t}(apid, ts);
@@ -82,6 +84,10 @@ class SQLiteBackend:
         await self._db.execute("PRAGMA journal_mode=WAL")
         for t in COLLECTIONS:
             await self._db.executescript(_SCHEMA.format(t=t))
+            try:
+                await self._db.execute(f"ALTER TABLE {t} ADD COLUMN sync_key TEXT")
+            except Exception:  # noqa: BLE001 - column already exists (fresh table or already migrated)
+                pass
         await self._db.commit()
         log.info("sqlite: using %s", self.path)
 
@@ -111,8 +117,10 @@ class SQLiteBackend:
 
     async def insert(self, collection: str, doc: dict) -> str:
         t = _check(collection)
+        ts, apid, text = self._row(t, doc)
         cur = await self._conn.execute(
-            f"INSERT INTO {t}(ts, apid, doc) VALUES (?, ?, ?)", self._row(t, doc))
+            f"INSERT INTO {t}(ts, apid, doc, sync_key) VALUES (?, ?, ?, ?)",
+            (ts, apid, text, uuid.uuid4().hex))
         await self._conn.commit()
         return str(cur.lastrowid)
 
@@ -120,8 +128,10 @@ class SQLiteBackend:
         t = _check(collection)
         ids = []
         for d in docs:
+            ts, apid, text = self._row(t, d)
             cur = await self._conn.execute(
-                f"INSERT INTO {t}(ts, apid, doc) VALUES (?, ?, ?)", self._row(t, d))
+                f"INSERT INTO {t}(ts, apid, doc, sync_key) VALUES (?, ?, ?, ?)",
+                (ts, apid, text, uuid.uuid4().hex))
             ids.append(str(cur.lastrowid))
         await self._conn.commit()
         return ids
@@ -192,11 +202,11 @@ class SQLiteBackend:
         return (await cur.fetchone())["n"]
 
     # ---- sync bookkeeping
-    async def unsynced(self, collection: str, limit: int) -> list[tuple[int, dict]]:
+    async def unsynced(self, collection: str, limit: int) -> list[tuple[int, dict, str]]:
         t = _check(collection)
         cur = await self._conn.execute(
-            f"SELECT id, doc FROM {t} WHERE synced = 0 ORDER BY id LIMIT ?", (int(limit),))
-        return [(r["id"], json.loads(r["doc"])) for r in await cur.fetchall()]
+            f"SELECT id, doc, sync_key FROM {t} WHERE synced = 0 ORDER BY id LIMIT ?", (int(limit),))
+        return [(r["id"], json.loads(r["doc"]), r["sync_key"]) for r in await cur.fetchall()]
 
     async def mark_synced(self, collection: str, ids: list[int], mongo_ids: list[str]) -> None:
         t = _check(collection)
@@ -221,6 +231,16 @@ class SQLiteBackend:
         total = 0
         for t in COLLECTIONS:
             cur = await self._conn.execute(f"DELETE FROM {t} WHERE synced = 1 AND ts < ?", (cutoff,))
+            total += cur.rowcount
+        await self._conn.commit()
+        return total
+
+    async def purge_older_than(self, days: int) -> int:
+        """Delete rows older than `days` regardless of sync state (used when Mongo is disabled)."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        total = 0
+        for t in COLLECTIONS:
+            cur = await self._conn.execute(f"DELETE FROM {t} WHERE ts < ?", (cutoff,))
             total += cur.rowcount
         await self._conn.commit()
         return total

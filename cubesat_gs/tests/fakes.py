@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from bson import ObjectId
-from pymongo.errors import AutoReconnect
+from pymongo.errors import AutoReconnect, BulkWriteError, DuplicateKeyError
 
 
 class _Cursor:
@@ -68,15 +68,43 @@ class FakeCollection:
         if self._client.fail:
             raise AutoReconnect("fake: connection lost")
 
+    def _unique_sync_key_index(self) -> bool:
+        return any(keys == [("sync_key", 1)] and kwargs.get("unique")
+                   for keys, kwargs in self.indexes)
+
+    def _check_dup(self, doc: dict) -> None:
+        key = doc.get("sync_key")
+        if key is None or not self._unique_sync_key_index():
+            return  # sparse index: nulls/missing values are not constrained
+        if any(d.get("sync_key") == key for d in self.docs):
+            raise DuplicateKeyError(f"fake: duplicate key error, sync_key={key!r}")
+
     async def insert_one(self, doc: dict) -> _Result:
         self._guard()
         d = dict(doc); d.setdefault("_id", ObjectId())
+        self._check_dup(d)
         self.docs.append(d)
         return _Result(inserted_id=d["_id"])
 
     async def insert_many(self, docs: list[dict], ordered=True) -> _Result:
         self._guard()
-        ids = [(await self.insert_one(d)).inserted_id for d in docs]
+        ids = []
+        errors = []
+        for idx, doc in enumerate(docs):
+            d = dict(doc); d.setdefault("_id", ObjectId())
+            try:
+                self._check_dup(d)
+            except DuplicateKeyError as e:
+                if ordered:
+                    raise
+                errors.append({"index": idx, "code": 11000, "errmsg": str(e)})
+                continue
+            self.docs.append(d)
+            ids.append(d["_id"])
+        if errors:
+            # Mirrors motor: with ordered=False, non-duplicate documents are still inserted;
+            # the error is raised after, covering only the ones that failed.
+            raise BulkWriteError({"writeErrors": errors, "nInserted": len(ids)})
         return _Result(inserted_ids=ids)
 
     async def update_one(self, flt: dict, update: dict):
@@ -86,7 +114,7 @@ class FakeCollection:
                 d.update(update.get("$set", {}))
                 return
 
-    async def find_one(self, flt: dict):
+    async def find_one(self, flt: dict, projection: dict | None = None):
         self._guard()
         return next((dict(d) for d in self.docs if _match(d, flt)), None)
 

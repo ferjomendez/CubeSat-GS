@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
-from pymongo.errors import PyMongoError
+from pymongo.errors import BulkWriteError, PyMongoError
 
 from cubesat_gs.core import ccsds
 from cubesat_gs.core.config import DatabaseConfig
@@ -60,9 +60,15 @@ class Storage:
     # ---- lifecycle
     async def start(self) -> None:
         await self._sqlite.connect()
-        purged = await self._sqlite.purge_synced_older_than(self._cfg.retention_days)
-        if purged:
-            log.info("sqlite: purged %d synced rows older than %d days", purged, self._cfg.retention_days)
+        if self._mongo is None:
+            purged = await self._sqlite.purge_older_than(self._cfg.retention_days)
+            if purged:
+                log.info("sqlite: purged %d rows older than %d days (mongo disabled)",
+                         purged, self._cfg.retention_days)
+        else:
+            purged = await self._sqlite.purge_synced_older_than(self._cfg.retention_days)
+            if purged:
+                log.info("sqlite: purged %d synced rows older than %d days", purged, self._cfg.retention_days)
         if self._mongo is not None:
             try:
                 await self._mongo.connect()
@@ -261,8 +267,8 @@ class Storage:
                         rows = await self._sqlite.unsynced(c, _SYNC_BATCH)
                         if not rows:
                             break
-                        ids, docs = [], []
-                        for rid, doc in rows:
+                        ids, docs, keys = [], [], []
+                        for rid, doc, sync_key in rows:
                             _restore_datetimes(doc)
                             if c in _PACKET_REF_COLLECTIONS:
                                 pid = doc.get("packet_id")
@@ -271,11 +277,22 @@ class Storage:
                                     if mapped is None:
                                         continue  # raw packet not uploaded yet; retry next round
                                     doc["packet_id"] = mapped
+                            doc["sync_key"] = sync_key
                             ids.append(rid)
                             docs.append(doc)
+                            keys.append(sync_key)
                         if not docs:
                             break
-                        mongo_ids = await self._mongo.insert_many(c, docs)
+                        try:
+                            mongo_ids = await self._mongo.insert_many(c, docs, ordered=False)
+                        except BulkWriteError:
+                            # A previous attempt may have partially landed in Atlas; re-uploading
+                            # the same batch must be a no-op for rows that already made it there.
+                            mongo_ids = []
+                            for doc, key in zip(docs, keys):
+                                existing = await self._mongo.find_id_by_sync_key(c, key)
+                                mongo_ids.append(existing if existing is not None
+                                                 else await self._mongo.insert(c, doc))
                         await self._sqlite.mark_synced(c, ids, mongo_ids)
                         uploaded += len(ids)
                         if len(rows) < _SYNC_BATCH:
