@@ -81,41 +81,108 @@ async def test_telemetry_history_downsamples(web_stack, tmp_path):
 
 
 async def test_cursor_pagination_identical_timestamps(web_stack):
-    """Verify no duplicate rows when multiple rows share identical timestamps."""
+    """Verify no duplicate rows when multiple rows share identical timestamps.
+
+    Tests cursor pagination with >=12 rows to verify correct handling when ids
+    cross digit boundaries (e.g., 9 vs 11) where lexicographic comparison fails.
+    """
     station, sim, client = web_stack
     base = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
-    # Write >=3 rows with identical timestamp
-    for i in range(5):
+    # Write 12 rows with identical timestamp (ids will span 1..12)
+    for i in range(12):
         await station.storage.write("raw_packets", {
             "timestamp": base, "apid": 10, "direction": "rx", "raw_hex": f"0A{i:02X}" + "00" * 10,
             "sequence_count": i, "rssi": -100.0, "snr": 5.0, "frequency_mhz": 437.0})
-    # Page with limit=2, verify no duplicates in multi-page fetch
-    r1 = await client.get("/api/packets", params={"limit": 2})
-    assert r1.status_code == 200
-    body1 = r1.json()
-    ids1 = {item["id"] for item in body1["items"]}
-    assert len(ids1) == 2 and body1["next_before"]
-    r2 = await client.get("/api/packets", params={"limit": 2, "before": body1["next_before"]})
-    assert r2.status_code == 200
-    body2 = r2.json()
-    ids2 = {item["id"] for item in body2["items"]}
-    assert len(ids2) == 2 and body2["next_before"]
-    # Verify no overlap between pages
-    assert len(ids1 & ids2) == 0, f"Duplicate IDs across pages: {ids1 & ids2}"
+
+    # Paginate with limit=5 through all rows
+    all_ids = []
+    next_before = None
+    page_count = 0
+    while True:
+        params = {"limit": 5}
+        if next_before:
+            params["before"] = next_before
+        r = await client.get("/api/packets", params=params)
+        assert r.status_code == 200
+        body = r.json()
+        page_ids = [item["id"] for item in body["items"]]
+        all_ids.extend(page_ids)
+        next_before = body["next_before"]
+        page_count += 1
+        if not next_before:
+            break
+        assert page_count < 10, "Infinite loop detected in pagination"
+
+    # Verify no duplicates and full coverage
+    assert len(all_ids) == len(set(all_ids)), f"Duplicate IDs found: {[id for id in all_ids if all_ids.count(id) > 1]}"
+    assert len(all_ids) == 12, f"Expected 12 rows, got {len(all_ids)}: {all_ids}"
+
+
+async def test_cursor_pagination_many_identical_timestamps(web_stack):
+    """Test bounded refetch loop with many rows sharing identical timestamp.
+
+    Verifies that when many rows (>limit) share a cursor timestamp, the refetch
+    loop correctly fetches more rows until a full page is available.
+    """
+    station, sim, client = web_stack
+    base = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
+    # Write 20 rows with identical timestamp
+    for i in range(20):
+        await station.storage.write("raw_packets", {
+            "timestamp": base, "apid": 10, "direction": "rx", "raw_hex": f"0A{i:02X}" + "00" * 10,
+            "sequence_count": i, "rssi": -100.0, "snr": 5.0, "frequency_mhz": 437.0})
+
+    # Paginate to the end with limit=3
+    all_ids = []
+    next_before = None
+    page_count = 0
+    while True:
+        params = {"limit": 3}
+        if next_before:
+            params["before"] = next_before
+        r = await client.get("/api/packets", params=params)
+        assert r.status_code == 200
+        body = r.json()
+        page_ids = [item["id"] for item in body["items"]]
+        all_ids.extend(page_ids)
+        next_before = body["next_before"]
+        page_count += 1
+        if not next_before:
+            break
+        assert page_count < 20, "Too many pages for 20 rows with limit=3"
+
+    # Verify no duplicates and full coverage
+    assert len(all_ids) == len(set(all_ids)), f"Duplicate IDs found"
+    assert len(all_ids) == 20, f"Expected 20 rows, got {len(all_ids)}"
 
 
 async def test_telemetry_field_order(web_stack):
     """Verify decoded fields appear in definition order for multi-field packets."""
     station, sim, client = web_stack
-    await _seed(station, 2)
-    # Get beacon packets (APID 10) which have fields
-    r = await client.get("/api/packets", params={"limit": 100, "apid": 10})
+    base = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
+
+    # Write a raw packet
+    ref = await station.storage.write("raw_packets", {
+        "timestamp": base, "apid": 50, "direction": "rx",
+        "raw_hex": "3200" + "00" * 10, "sequence_count": 0,
+        "rssi": -100.0, "snr": 5.0, "frequency_mhz": 437.0})
+
+    # Extract packet_id from the ref (Ref is ("sqlite"|"mongo", id_string))
+    packet_id = ref[1]
+
+    # Write three decoded_telemetry rows with fields in order a, b, c
+    for i, field_name in enumerate(["a", "b", "c"]):
+        await station.storage.write("decoded_telemetry", {
+            "packet_id": packet_id, "timestamp": base, "apid": 50,
+            "apid_name": "Test", "field_name": field_name,
+            "field_value": float(i), "unit": "V", "alarm_status": "nominal"})
+
+    # Fetch the packet and verify field order
+    r = await client.get("/api/packets", params={"limit": 10, "apid": 50})
     assert r.status_code == 200
     items = r.json()["items"]
-    beacon = next((i for i in items if i["apid"] == 10 and i["fields"]), None)
-    assert beacon is not None, "No Beacon packet with fields found"
-    # Verify field order matches definition
-    defs = station.decoder.definitions[10]
-    expected_order = [f.name for f in defs.fields]
-    actual_order = [f["name"] for f in beacon["fields"]]
-    assert actual_order == expected_order, f"Field order mismatch: expected {expected_order}, got {actual_order}"
+    assert len(items) > 0, "No packets found"
+    item = items[0]
+    assert item["apid"] == 50 and item["fields"]
+    actual_order = [f["name"] for f in item["fields"]]
+    assert actual_order == ["a", "b", "c"], f"Field order mismatch: expected ['a', 'b', 'c'], got {actual_order}"

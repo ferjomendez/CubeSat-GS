@@ -22,6 +22,26 @@ def _parse_cursor(before: str | None) -> tuple[datetime | None, str | None]:
         raise ApiError(422, "invalid_cursor", str(e)) from e
 
 
+def _id_key(s: str) -> tuple:
+    """Create a sortable key for row ids.
+
+    Returns (0, int) for numeric ids (SQLite), (1, str) for ObjectId hex (Mongo).
+    Ensures correct ordering across both backends and digit boundaries.
+    """
+    if s.isdigit():
+        return (0, int(s))
+    return (1, s)
+
+
+def _ts_equal(row_ts, cursor_ts) -> bool:
+    """Compare timestamps, handling both datetime and string types."""
+    if hasattr(row_ts, 'isoformat'):
+        row_ts = row_ts.isoformat()
+    if hasattr(cursor_ts, 'isoformat'):
+        cursor_ts = cursor_ts.isoformat()
+    return str(row_ts) == str(cursor_ts)
+
+
 @router.get("/packets", response_model=PacketsPageOut)
 async def list_packets(station: GroundStation = Depends(get_station),
                        apid: int | None = None, direction: Direction | None = None, kind: Kind | None = None,
@@ -29,20 +49,26 @@ async def list_packets(station: GroundStation = Depends(get_station),
                        limit: int = Query(100, ge=1, le=500), before: str | None = None):
     cursor_ts, cursor_id = _parse_cursor(before)
     q_end = min(end, cursor_ts) if (end and cursor_ts) else (cursor_ts or end)
-    # Fetch more rows when cursor filtering is needed, since some will be dropped
-    fetch_limit = limit + 1 if cursor_id is None else limit * 2 + 1
-    rows = await station.storage.query("raw_packets", start=start, end=q_end, apid=apid, limit=fetch_limit)
 
-    # Drop rows on identical timestamp >= cursor_id to avoid duplicates across pages
-    if cursor_id is not None and rows:
-        # Normalize timestamps for comparison (may be datetime or string)
-        def ts_equal(row_ts, cursor_ts):
-            if hasattr(row_ts, 'isoformat'):
-                row_ts = row_ts.isoformat()
-            if hasattr(cursor_ts, 'isoformat'):
-                cursor_ts = cursor_ts.isoformat()
-            return str(row_ts) == str(cursor_ts)
-        rows = [r for r in rows if not (ts_equal(r["timestamp"], cursor_ts) and str(r["id"]) >= cursor_id)]
+    # Bounded refetch loop: fetch until we have enough filtered rows
+    fetch_limit = limit + 1
+    rows = []
+    for refetch_iter in range(4):  # cap at 4 iterations (max ~4096 rows)
+        rows = await station.storage.query("raw_packets", start=start, end=q_end, apid=apid, limit=fetch_limit)
+
+        # Apply cursor filtering to drop rows at or after the cursor
+        filtered = rows
+        if cursor_id is not None and filtered:
+            cursor_id_key = _id_key(cursor_id)
+            filtered = [r for r in filtered if not (_ts_equal(r["timestamp"], cursor_ts) and _id_key(str(r["id"])) >= cursor_id_key)]
+
+        # If we have enough filtered rows, or the database returned fewer than requested, stop
+        if len(filtered) > limit or len(rows) < fetch_limit:
+            rows = filtered
+            break
+
+        # Otherwise, double the fetch limit and try again
+        fetch_limit = min(fetch_limit * 2, 4096)
 
     raw_page = rows[:limit]
     # Check if there are more rows beyond this page (before direction/kind filtering)
