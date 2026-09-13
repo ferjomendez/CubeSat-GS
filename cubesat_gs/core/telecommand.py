@@ -14,7 +14,7 @@ import yaml
 
 from cubesat_gs.core import ccsds
 from cubesat_gs.core.config import CommandConfig
-from cubesat_gs.core.events import CommandCompleted, EventBus, PacketReceived, now
+from cubesat_gs.core.events import CommandCompleted, CommandStarted, EventBus, PacketReceived, now
 from cubesat_gs.core.frequency_manager import Mode
 from cubesat_gs.core.serial_handler import SerialCommandTimeout, SerialDisconnected
 
@@ -136,6 +136,8 @@ class TelecommandManager:
         try:
             for attempt in range(1, self._cfg.max_retries + 2):
                 rec.attempts = attempt
+                if attempt == 1:
+                    self._bus.publish(CommandStarted(name=name, raw_hex=raw.hex().upper()))
                 try:
                     await self._serial.send_tx(raw)
                 except (SerialCommandTimeout, SerialDisconnected) as e:
