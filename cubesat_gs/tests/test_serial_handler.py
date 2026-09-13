@@ -32,6 +32,12 @@ class Collector:
                 await asyncio.sleep(0.005)
         await asyncio.wait_for(_w(), timeout)
 
+    async def wait_until(self, pred, timeout=1.0):
+        async def _w():
+            while not pred():
+                await asyncio.sleep(0.005)
+        await asyncio.wait_for(_w(), timeout)
+
 
 @pytest.fixture
 async def stack():
@@ -161,6 +167,21 @@ async def test_reconnect_after_eof(stack):
         await pending
     sim.silent = False
     await h.set_frequency(437.25)  # works on the new connection
+
+
+async def test_ack_and_eof_in_same_step_does_not_wedge(stack):
+    bus, sim, ser, h, col = stack
+    sim.silent = True                                  # the sim must not ack on its own
+    t = asyncio.create_task(h.set_frequency(437.25))
+    await col.wait_until(lambda: sim.freq == 437.25)   # FREQ line has reached the sim
+    ser._reader.feed_data(b"OK:FREQ_SET\n")            # ack and EOF in the same reader step
+    ser._reader.feed_eof()
+    try:
+        await asyncio.wait_for(t, 1.0)                 # completes (normally or SerialDisconnected) — must not hang
+    except SerialDisconnected:
+        pass
+    await col.wait(ConnectionChanged, 3)               # True, False, True: the handler reconnected
+    assert [e.connected for e in col.of(ConnectionChanged)] == [True, False, True]
 
 
 async def test_open_failure_retries():

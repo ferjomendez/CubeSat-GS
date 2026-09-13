@@ -153,7 +153,12 @@ class SerialHandler:
             try:
                 writer.write((cmd.line + "\n").encode())
                 await writer.drain()
-                await asyncio.wait_for(cmd.ack, cmd.timeout)
+                # Not asyncio.wait_for(cmd.ack, cmd.timeout): on 3.11 that can lose a
+                # cancellation that lands in the same loop step as the ack (gh-86296),
+                # wedging this loop forever. asyncio.wait() never swallows cancellation.
+                done, _ = await asyncio.wait({cmd.ack}, timeout=cmd.timeout)
+                if not done:
+                    raise asyncio.TimeoutError
             except asyncio.TimeoutError:
                 log.warning("serial: no %s within %.1fs for %r", cmd.ack_kind, cmd.timeout, cmd.line)
                 if not cmd.done.done():
@@ -231,7 +236,9 @@ class SerialHandler:
             finally:
                 writer_task.cancel()
                 try:
-                    await writer_task
+                    await asyncio.wait_for(writer_task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    log.warning("serial: writer task did not stop within 1.0s on %s", port)
                 except (asyncio.CancelledError, Exception):  # noqa: BLE001
                     pass
                 self._close_writer()
