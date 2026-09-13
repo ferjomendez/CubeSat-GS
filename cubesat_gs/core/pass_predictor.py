@@ -68,6 +68,7 @@ class PassPredictor:
         self._cache: list[Pass] = []
         self._cache_at: datetime | None = None
         self._cache_days = 0
+        self._cache_gen = 0
         self._lock = asyncio.Lock()
         self._observer = wgs84.latlon(self._lat, self._lon, elevation_m=self._alt)
         self._load_tle(satellite_cfg.tle_line1, satellite_cfg.tle_line2)
@@ -96,10 +97,11 @@ class PassPredictor:
 
     def _invalidate(self) -> None:
         self._cache, self._cache_at = [], None
+        self._cache_gen += 1
 
     async def set_tle(self, line1: str, line2: str) -> None:
         prev = (self._sat, self.tle, self.reason)
-        self._load_tle(line1, line2)
+        await asyncio.to_thread(self._load_tle, line1, line2)
         if self._sat is None:
             reason = self.reason
             self._sat, self.tle, self.reason = prev  # a bad new TLE never discards a working one
@@ -118,6 +120,8 @@ class PassPredictor:
     def state_at(self, t: datetime) -> tuple[float, float, float, float]:
         """(az_deg, el_deg, range_km, range_rate_km_s) at t. Requires enabled."""
         assert self._sat is not None
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
         tt = self._ts.from_datetime(t.astimezone(timezone.utc))
         topo = (self._sat - self._observer).at(tt)
         alt, az, dist, _, _, rr = topo.frame_latlon_and_rates(self._observer)
@@ -190,10 +194,12 @@ class PassPredictor:
             if fresh and not force:
                 return self._cache
             start = t - timedelta(minutes=15)  # include a pass already in progress
+            gen = self._cache_gen
             passes = await asyncio.to_thread(self._search, start, days)
-            self._cache, self._cache_at, self._cache_days = passes, t, days
+            if gen == self._cache_gen:
+                self._cache, self._cache_at, self._cache_days = passes, t, days
             log.info("passes: %d passes in next %d day(s) above %.0f°", len(passes), days, self._min_el)
-            return self._cache
+            return passes
 
     async def track(self, pass_id: str, step_s: int = 10) -> list[tuple[datetime, float, float, float, float]]:
         p = next((x for x in self._cache if x.id == pass_id), None)
