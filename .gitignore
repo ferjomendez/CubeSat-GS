@@ -1,0 +1,27 @@
+# Secrets
+.env
+
+# Runtime data
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Node (Phase 2)
+node_modules/
+dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
