@@ -258,11 +258,13 @@ async def test_scheduler_recomputes_on_invalidation():
                        PassConfig(min_elevation=10, prediction_days=1), tctm_mhz=435.5,
                        clock=lambda: clock["t"], update_interval=0.02)
     await pp.start()
-    # Wait for scheduler to populate cache
+    # Step 1: Wait for scheduler to populate cache
     await _wait_for(lambda: pp.next_pass() is not None)
-    old_count = len(pp._cache)
-    # Change min elevation to 30° (filter out lower passes)
+    # Step 2: Change min elevation to 30° - cache is emptied synchronously
     await pp.set_min_elevation(30)
-    # Wait for scheduler to recompute cache (should happen immediately, not wait 1 hour)
-    await _wait_for(lambda: len(pp._cache) < old_count)
+    assert pp.next_pass() is None  # Prove cache was cleared
+    # Step 3: Wait for scheduler to recompute cache (proves recompute-on-invalidate works)
+    # This only succeeds because _tick() checks _cache_at is None and recomputes
+    # without waiting for hourly timer. Clock is NOT advanced.
+    await _wait_for(lambda: pp.next_pass() is not None)
     await pp.stop()
