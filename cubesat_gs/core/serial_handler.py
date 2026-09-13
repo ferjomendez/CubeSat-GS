@@ -122,13 +122,17 @@ class SerialHandler:
                 await self._run_task
             except asyncio.CancelledError:
                 pass
+            self._run_task = None
+        while not self._queue.empty():
+            cmd = self._queue.get_nowait()
+            if not cmd.done.done():
+                cmd.done.set_exception(SerialDisconnected("handler stopped"))
         self._close_writer()
         self._set_connected(False)
 
     async def send_tx(self, raw: bytes) -> None:
         await self._submit("TX:" + raw.hex().upper(), "TX_DONE", self._cfg.timeouts.tx)
         self._bus.publish(PacketSent(raw=bytes(raw), freq_mhz=self._get_freq()))
-        await asyncio.sleep(0)  # let the bus dispatch to subscribers before we return
 
     async def set_frequency(self, mhz: float) -> None:
         await self._submit(f"FREQ:{mhz:.3f}", "FREQ_SET", self._cfg.timeouts.freq)
@@ -152,7 +156,8 @@ class SerialHandler:
                 await asyncio.wait_for(cmd.ack, cmd.timeout)
             except asyncio.TimeoutError:
                 log.warning("serial: no %s within %.1fs for %r", cmd.ack_kind, cmd.timeout, cmd.line)
-                cmd.done.set_exception(SerialCommandTimeout(cmd.line))
+                if not cmd.done.done():
+                    cmd.done.set_exception(SerialCommandTimeout(cmd.line))
             except asyncio.CancelledError:
                 if not cmd.done.done():
                     cmd.done.set_exception(SerialDisconnected(cmd.line))
@@ -162,7 +167,8 @@ class SerialHandler:
                     cmd.done.set_exception(SerialDisconnected(str(e)))
                 raise
             else:
-                cmd.done.set_result(None)
+                if not cmd.done.done():
+                    cmd.done.set_result(None)
             finally:
                 self._inflight = None
 

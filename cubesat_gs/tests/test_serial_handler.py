@@ -88,6 +88,8 @@ async def test_send_tx_waits_for_ack_and_publishes_sent(stack):
     bus, sim, ser, h, col = stack
     await h.send_tx(b"\x10\x64\xc0\x00\x00\x05PING")
     assert sim.received_tx == [b"\x10\x64\xc0\x00\x00\x05PING"]
+    await col.wait(PacketSent)
+    await col.wait(ModemAck)
     assert col.of(PacketSent)[0].raw == b"\x10\x64\xc0\x00\x00\x05PING"
     assert col.of(ModemAck)[0].kind == "TX_DONE"
 
@@ -120,6 +122,28 @@ async def test_only_one_outstanding_command(stack):
     with pytest.raises(SerialCommandTimeout):
         await t1
     with pytest.raises(SerialCommandTimeout):
+        await t2
+
+
+async def test_cancelled_command_does_not_kill_writer_loop(stack):
+    bus, sim, ser, h, col = stack
+    sim.silent = True
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(h.set_frequency(437.25), 0.001)
+    sim.silent = False
+    await h.set_frequency(437.25)  # writer loop survived the cancellation
+
+
+async def test_stop_fails_queued_commands(stack):
+    bus, sim, ser, h, col = stack
+    sim.silent = True
+    t1 = asyncio.create_task(h.send_tx(b"\x01"))
+    t2 = asyncio.create_task(h.send_tx(b"\x02"))
+    await asyncio.sleep(0.02)
+    await h.stop()
+    with pytest.raises(SerialDisconnected):
+        await t1
+    with pytest.raises(SerialDisconnected):
         await t2
 
 
