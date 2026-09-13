@@ -143,3 +143,27 @@ async def test_mongo_unreachable_at_start_is_degraded_not_fatal(tmp_path):
     h = await st.health()
     assert h["mongo"] == "ok" and h["pending_sync"] == 0
     await st.stop()
+
+
+# ---- F1: packet_id correlation must not key on id(source) (CPython reuses freed addresses)
+
+async def test_packet_ids_are_distinct_across_many_packets(tmp_path):
+    bus = EventBus()
+    st = Storage(bus, _cfg(tmp_path), tmp_path, sync_interval=1000)
+    await st.start()
+    for _ in range(8):
+        src = PacketReceived(raw=BEACON, rssi=None, snr=None, freq_mhz=437.25)
+        bus.publish(src)
+        bus.publish(_decoded(src))
+        del src
+        await asyncio.sleep(0.02)
+
+    raw = await st.query("raw_packets", limit=100)
+    decoded = await st.query("decoded_telemetry", limit=100)
+    assert len(raw) == 8
+    assert len(decoded) == 8
+    raw_ids = [r["id"] for r in raw]
+    assert {d["packet_id"] for d in decoded} == set(raw_ids)  # all distinct, each maps to its own raw row
+    # decoded rows are inserted in the same order as raw rows, so the pairing must match 1:1 in order
+    assert [d["packet_id"] for d in reversed(decoded)] == list(reversed(raw_ids))
+    await st.stop()

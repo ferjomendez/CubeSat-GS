@@ -51,7 +51,7 @@ class Storage:
         self._degraded = False
         self._sync_interval = sync_interval
         self._flush_interval = session_flush_interval
-        self._refs: OrderedDict[int, asyncio.Future] = OrderedDict()
+        self._refs: OrderedDict[int, tuple[PacketReceived, asyncio.Future]] = OrderedDict()
         self._tasks: list[asyncio.Task] = []
         self._sync_lock = asyncio.Lock()
         self.session: dict[str, Any] = {}
@@ -157,13 +157,17 @@ class Storage:
 
     # ---- packet id correlation
     def packet_ref(self, source: PacketReceived) -> asyncio.Future:
+        # Keyed on id(source): CPython can reuse the address of a freed PacketReceived, so a
+        # strong reference to the source is kept alongside the future for as long as the entry
+        # lives in the bounded map — that pins the object and keeps its id from being reused.
         key = id(source)
-        fut = self._refs.get(key)
-        if fut is None:
-            fut = asyncio.get_running_loop().create_future()
-            self._refs[key] = fut
-            while len(self._refs) > 1000:
-                self._refs.popitem(last=False)
+        entry = self._refs.get(key)
+        if entry is not None:
+            return entry[1]
+        fut = asyncio.get_running_loop().create_future()
+        self._refs[key] = (source, fut)
+        while len(self._refs) > 1000:
+            self._refs.popitem(last=False)
         return fut
 
     async def _ref_for(self, source: PacketReceived) -> Ref | None:
