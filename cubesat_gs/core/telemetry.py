@@ -16,11 +16,12 @@ from cubesat_gs.core.events import (AlarmRaised, EventBus, PacketDecoded, Packet
 
 log = logging.getLogger(__name__)
 
-_NUMERIC = {
+NUMERIC_TYPES = {
     "uint8": ">B", "int8": ">b", "uint16": ">H", "int16": ">h",
     "uint32": ">I", "int32": ">i", "float32": ">f",
 }
-_TYPES = set(_NUMERIC) | {"string", "bytes"}
+_NUMERIC = NUMERIC_TYPES  # backward compatibility alias
+_TYPES = set(NUMERIC_TYPES) | {"string", "bytes"}
 
 
 class TelemetryDefError(ValueError):
@@ -76,11 +77,11 @@ def _parse_field(apid_key: str, raw: dict) -> FieldDef:
     t = str(raw["type"])
     if t not in _TYPES:
         raise TelemetryDefError(f"{where}: unknown type {t!r}")
-    if t in _NUMERIC and "length" in raw:
+    if t in NUMERIC_TYPES and "length" in raw:
         raise TelemetryDefError(f"{where}: 'length' is only valid for string/bytes")
-    if t not in _NUMERIC and ("scale" in raw or "offset" in raw):
+    if t not in NUMERIC_TYPES and ("scale" in raw or "offset" in raw):
         raise TelemetryDefError(f"{where}: 'scale'/'offset' only valid for numeric types")
-    if t not in _NUMERIC and (raw.get("alarm_low") is not None or raw.get("alarm_high") is not None):
+    if t not in NUMERIC_TYPES and (raw.get("alarm_low") is not None or raw.get("alarm_high") is not None):
         raise TelemetryDefError(f"{where}: 'alarm_low'/'alarm_high' only valid for numeric types")
     alarm_low = alarm_high = None
     if raw.get("alarm_low") is not None:
@@ -140,7 +141,7 @@ def decode_payload(apid_def: ApidDef, payload: bytes) -> DecodedPacket:
     out = DecodedPacket(apid=apid_def.apid, apid_name=apid_def.name)
     pos = 0
     for fd in apid_def.fields:
-        if fd.type in _NUMERIC:
+        if fd.type in NUMERIC_TYPES:
             fmt = _NUMERIC[fd.type]
             size = struct.calcsize(fmt)
             chunk = payload[pos:pos + size]

@@ -10,7 +10,7 @@ from fastapi import FastAPI, WebSocket
 from cubesat_gs.core.station import GroundStation
 from cubesat_gs.web.deps import install_error_handlers
 from cubesat_gs.web.hub import WebSocketHub
-from cubesat_gs.web.routes import status as status_routes
+from cubesat_gs.web.routes import feed as feed_routes, status as status_routes, telemetry as telemetry_routes
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,8 @@ def create_app(station: GroundStation, *, static_dir: Path | None = None) -> Fas
     app.state.static_dir = static_dir or STATIC_DIR
     install_error_handlers(app)
     app.include_router(status_routes.router, prefix="/api")
+    app.include_router(feed_routes.router, prefix="/api")
+    app.include_router(telemetry_routes.router, prefix="/api")
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
