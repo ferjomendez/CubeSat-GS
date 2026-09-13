@@ -1,0 +1,55 @@
+serial:
+  port: "auto"              # "auto", "/dev/ttyUSB0", "COM3", or "socket://localhost:5000"
+  baudrate: 115200
+  reconnect_interval: 5     # seconds
+  timeouts:
+    tx: 5.0                 # seconds to wait for OK:TX_DONE
+    freq: 2.0               # seconds to wait for OK:FREQ_SET
+
+frequencies:
+  tctm: 435.500
+  beacon: 437.250
+
+ccsds:
+  length_includes_crc: true   # OBC_sim.py convention; false when OBC becomes standard-compliant
+  sequence_scope: global      # global | per_apid
+
+station:
+  name: "UAI Ground Station"
+  latitude: -33.35
+  longitude: -70.67
+  altitude: 500
+
+satellite:
+  name: "UAI-SAT"
+  tle_line1: ""
+  tle_line2: ""
+  tle_source: ""
+
+passes:
+  min_elevation: 10
+  prediction_days: 7
+
+commands:
+  registry: "config/commands.yaml"
+  default_timeout: 10
+  max_retries: 3
+  retry_backoff: 1.5
+  history_size: 500
+
+telemetry:
+  definitions: "config/telemetry_defs.yaml"
+
+web:
+  host: "0.0.0.0"
+  port: 8080
+
+database:
+  # MONGO_URI is read from the environment variable, NOT from this file
+  db_name: "cubesat_gs"
+  retention_days: 365
+  local_fallback_path: "data/gs_offline.db"
+
+logging:
+  level: "INFO"
+  file: "logs/gs.log"
