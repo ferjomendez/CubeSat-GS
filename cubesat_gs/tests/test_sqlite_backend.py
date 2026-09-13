@@ -65,6 +65,8 @@ async def test_sync_bookkeeping(db):
     assert [i for i, _ in await db.unsynced("alarms", limit=10)] == [3]
     assert await db.mongo_id_for("alarms", 2) == "bbb"
     assert await db.mongo_id_for("alarms", 3) is None
+    assert await db.count_unsynced("alarms") == 1
+    assert await db.count_unsynced("commands") == 0
 
 
 async def test_purge_only_synced_old_rows(db):

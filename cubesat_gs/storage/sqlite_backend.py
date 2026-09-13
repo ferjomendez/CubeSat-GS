@@ -205,6 +205,11 @@ class SQLiteBackend:
             [(m, int(i)) for i, m in zip(ids, mongo_ids)])
         await self._conn.commit()
 
+    async def count_unsynced(self, collection: str) -> int:
+        t = _check(collection)
+        cur = await self._conn.execute(f"SELECT COUNT(*) AS n FROM {t} WHERE synced = 0")
+        return (await cur.fetchone())["n"]
+
     async def mongo_id_for(self, collection: str, id: int) -> str | None:
         t = _check(collection)
         cur = await self._conn.execute(f"SELECT mongo_id FROM {t} WHERE id = ?", (int(id),))

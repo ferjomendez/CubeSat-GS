@@ -148,7 +148,7 @@ class Storage:
         pending = 0
         if self._mongo is not None:
             for c in COLLECTIONS:
-                pending += len(await self._sqlite.unsynced(c, limit=10_000))
+                pending += await self._sqlite.count_unsynced(c)
         if self._mongo is None:
             mongo = "disabled"
         else:
