@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from pymongo.errors import PyMongoError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from cubesat_gs.storage.mongo_backend import MongoBackend
 from cubesat_gs.tests.fakes import FakeMotorClient
@@ -72,3 +72,13 @@ async def test_iterate_sets_batch_size(mb):
         pass
     db = client["cubesat_gs"]
     assert db["raw_packets"].last_cursor.batch_size_used == 7
+
+
+async def test_duplicate_explicit_null_sync_key_rejected(mb):
+    """R2c: a real sparse unique index still indexes an explicit null -- only a MISSING
+    field is exempt. Two docs with sync_key: None must collide, not silently coexist."""
+    client, b = mb
+    coll = client["cubesat_gs"]["raw_packets"]
+    await coll.insert_one({"timestamp": _t(0), "sync_key": None})
+    with pytest.raises(DuplicateKeyError):
+        await coll.insert_one({"timestamp": _t(1), "sync_key": None})

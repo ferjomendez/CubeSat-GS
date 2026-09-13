@@ -39,7 +39,6 @@ async def run(args: argparse.Namespace) -> int:
         cfg.serial.port = f"socket://127.0.0.1:{port}"
         log.info("simulator: modem simulator listening on %s", cfg.serial.port)
 
-    station = GroundStation(cfg)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     handlers: dict[int, tuple[str, object]] = {}
@@ -51,13 +50,16 @@ async def run(args: argparse.Namespace) -> int:
             old_handler = signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
             handlers[sig] = ("signal.signal", old_handler)
 
+    station = None
     try:
+        station = GroundStation(cfg)
         await station.start()
         log.info("ground station running; Ctrl+C to stop")
         await stop.wait()
     finally:
         log.info("ground station stopping")
-        await station.stop()
+        if station is not None:
+            await station.stop()
         if sim is not None:
             await sim.stop()
         if sim_server is not None:

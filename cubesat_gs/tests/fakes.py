@@ -73,10 +73,13 @@ class FakeCollection:
                    for keys, kwargs in self.indexes)
 
     def _check_dup(self, doc: dict) -> None:
-        key = doc.get("sync_key")
-        if key is None or not self._unique_sync_key_index():
-            return  # sparse index: nulls/missing values are not constrained
-        if any(d.get("sync_key") == key for d in self.docs):
+        # Sparse semantics: only a document entirely MISSING the field is exempt. A real
+        # MongoDB sparse unique index still indexes an explicit `sync_key: None`, so that
+        # must collide like any other value -- do not exempt it.
+        if "sync_key" not in doc or not self._unique_sync_key_index():
+            return
+        key = doc["sync_key"]
+        if any("sync_key" in d and d["sync_key"] == key for d in self.docs):
             raise DuplicateKeyError(f"fake: duplicate key error, sync_key={key!r}")
 
     async def insert_one(self, doc: dict) -> _Result:

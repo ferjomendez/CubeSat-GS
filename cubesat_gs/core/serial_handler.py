@@ -146,10 +146,13 @@ class SerialHandler:
         await self._queue.put(cmd)
         if self._stopping and not cmd.done.done():
             # stop() may have already drained the queue before this cmd was put onto it;
-            # nothing will ever consume it now, so it would otherwise hang forever.
-            exc = SerialDisconnected("handler stopped")
-            cmd.done.set_exception(exc)
-            raise exc
+            # nothing will ever consume it now, so it would otherwise hang forever. In
+            # practice stop() drains and fails every queued cmd.done itself, so this branch
+            # is not reachable from the existing tests -- cancel() rather than
+            # set_exception() so an exception nobody awaits can't log "Future exception was
+            # never retrieved" if this ever does fire.
+            cmd.done.cancel()
+            raise SerialDisconnected("handler stopped")
         await cmd.done
 
     async def _writer_loop(self, writer) -> None:

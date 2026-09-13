@@ -60,15 +60,18 @@ class Storage:
     # ---- lifecycle
     async def start(self, *, create_session: bool = True) -> None:
         await self._sqlite.connect()
-        if self._mongo is None:
-            purged = await self._sqlite.purge_older_than(self._cfg.retention_days)
-            if purged:
-                log.info("sqlite: purged %d rows older than %d days (mongo disabled)",
-                         purged, self._cfg.retention_days)
-        else:
-            purged = await self._sqlite.purge_synced_older_than(self._cfg.retention_days)
-            if purged:
-                log.info("sqlite: purged %d synced rows older than %d days", purged, self._cfg.retention_days)
+        if create_session:
+            # A read-only Storage (create_session=False, e.g. the exporter CLI) must never
+            # mutate the database it is just reading from.
+            if self._mongo is None:
+                purged = await self._sqlite.purge_older_than(self._cfg.retention_days)
+                if purged:
+                    log.info("sqlite: purged %d rows older than %d days (mongo disabled)",
+                             purged, self._cfg.retention_days)
+            else:
+                purged = await self._sqlite.purge_synced_older_than(self._cfg.retention_days)
+                if purged:
+                    log.info("sqlite: purged %d synced rows older than %d days", purged, self._cfg.retention_days)
         if self._mongo is not None:
             try:
                 await self._mongo.connect()
@@ -281,7 +284,8 @@ class Storage:
                                     if mapped is None:
                                         continue  # raw packet not uploaded yet; retry next round
                                     doc["packet_id"] = mapped
-                            doc["sync_key"] = sync_key
+                            if sync_key:  # never key a doc on a falsy/legacy-null sync_key
+                                doc["sync_key"] = sync_key
                             ids.append(rid)
                             docs.append(doc)
                             keys.append(sync_key)
@@ -294,7 +298,7 @@ class Storage:
                             # the same batch must be a no-op for rows that already made it there.
                             mongo_ids = []
                             for doc, key in zip(docs, keys):
-                                existing = await self._mongo.find_id_by_sync_key(c, key)
+                                existing = await self._mongo.find_id_by_sync_key(c, key) if key else None
                                 mongo_ids.append(existing if existing is not None
                                                  else await self._mongo.insert(c, doc))
                         await self._sqlite.mark_synced(c, ids, mongo_ids)

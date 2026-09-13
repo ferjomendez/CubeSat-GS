@@ -100,3 +100,61 @@ async def test_run_cleans_up_when_station_start_fails(tmp_path, monkeypatch):
         await asyncio.wait_for(run(args), 5.0)
 
     assert calls == ["station_stop", "sim_stop", "server_close", "server_wait_closed"]
+
+
+async def test_run_cleans_up_when_station_construction_fails(tmp_path, monkeypatch):
+    """R4: GroundStation(cfg) must be constructed inside the try/finally, so a config
+    problem (e.g. a bad telemetry_defs.yaml) surfacing from __init__ still tears down the
+    --sim TCP server and simulator instead of leaking them."""
+    monkeypatch.delenv("MONGO_URI", raising=False)
+    calls = []
+
+    class FakeStation:
+        def __init__(self, cfg, **kwargs):
+            raise RuntimeError("boom-construct")
+
+        async def start(self):
+            pass
+
+        async def stop(self):
+            calls.append("station_stop")
+
+    class FakeSim:
+        def __init__(self, **kwargs):
+            pass
+
+        async def stop(self):
+            calls.append("sim_stop")
+
+    class FakeServer:
+        def close(self):
+            calls.append("server_close")
+
+        async def wait_closed(self):
+            calls.append("server_wait_closed")
+
+    async def fake_serve_tcp(sim, host, port):
+        return FakeServer(), 0
+
+    monkeypatch.setattr(main_mod, "GroundStation", FakeStation)
+    monkeypatch.setattr("cubesat_gs.tests.serial_simulator.ModemSimulator", FakeSim)
+    monkeypatch.setattr("cubesat_gs.tests.serial_simulator.serve_tcp", fake_serve_tcp)
+
+    cfg = {
+        "serial": {"port": "auto", "reconnect_interval": 0.2},
+        "commands": {"registry": str(PKG / "config" / "commands.yaml")},
+        "telemetry": {"definitions": str(PKG / "config" / "telemetry_defs.yaml")},
+        "database": {"local_fallback_path": str(tmp_path / "gs.db")},
+        "logging": {"level": "INFO", "file": str(tmp_path / "gs.log")},
+    }
+    cfg_path = tmp_path / "gs_config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    args = argparse.Namespace(config=str(cfg_path), sim=True, sim_beacon_interval=1.0,
+                              sim_rssi=False, log_level="INFO")
+
+    with pytest.raises(RuntimeError, match="boom-construct"):
+        await asyncio.wait_for(run(args), 5.0)
+
+    # station was never constructed, so no station_stop -- but the sim/server must still
+    # be torn down.
+    assert calls == ["sim_stop", "server_close", "server_wait_closed"]

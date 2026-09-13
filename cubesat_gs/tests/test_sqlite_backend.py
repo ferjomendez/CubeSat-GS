@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+import aiosqlite
 import pytest
 
 from cubesat_gs.storage.sqlite_backend import COLLECTIONS, SQLiteBackend
@@ -148,3 +149,37 @@ async def test_datetimes_normalised_to_utc(db):
     rows = await db.query("raw_packets", start=datetime(2026, 9, 13, 15, 0, tzinfo=timezone.utc))
     assert len(rows) == 1
     assert rows[0]["id"] == i1
+
+
+async def test_migration_backfills_null_sync_keys(tmp_path):
+    """R2a: legacy rows from before the sync_key column existed must be backfilled, not left NULL."""
+    path = tmp_path / "legacy.db"
+    old_schema = """
+    CREATE TABLE IF NOT EXISTS raw_packets (
+        id INTEGER PRIMARY KEY,
+        ts TEXT NOT NULL,
+        apid INTEGER,
+        doc TEXT NOT NULL,
+        synced INTEGER NOT NULL DEFAULT 0,
+        mongo_id TEXT
+    );
+    """
+    raw = await aiosqlite.connect(path)
+    await raw.executescript(old_schema)
+    await raw.execute("INSERT INTO raw_packets(ts, apid, doc) VALUES (?, ?, ?)",
+                      ("2026-01-01T00:00:00+00:00", 1, '{"a": 1}'))
+    await raw.execute("INSERT INTO raw_packets(ts, apid, doc) VALUES (?, ?, ?)",
+                      ("2026-01-02T00:00:00+00:00", 1, '{"a": 2}'))
+    await raw.commit()
+    await raw.close()
+
+    b = SQLiteBackend(path)
+    await b.connect()
+    cur = await b._conn.execute("SELECT id, sync_key FROM raw_packets ORDER BY id")
+    rows = await cur.fetchall()
+    await b.close()
+
+    assert len(rows) == 2
+    keys = [r["sync_key"] for r in rows]
+    assert all(keys)  # backfilled: no row left with a NULL/empty sync_key
+    assert keys[0] != keys[1]  # distinct per row, not the same value copied to both

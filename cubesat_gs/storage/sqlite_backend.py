@@ -88,6 +88,11 @@ class SQLiteBackend:
                 await self._db.execute(f"ALTER TABLE {t} ADD COLUMN sync_key TEXT")
             except Exception:  # noqa: BLE001 - column already exists (fresh table or already migrated)
                 pass
+            # Backfill any pre-existing rows from before this column existed: a real Mongo
+            # sparse unique index indexes explicit NULLs, so leaving these NULL would let a
+            # second legacy row collide with the first during sync and silently drop rows.
+            await self._db.execute(
+                f"UPDATE {t} SET sync_key = lower(hex(randomblob(16))) WHERE sync_key IS NULL")
         await self._db.commit()
         log.info("sqlite: using %s", self.path)
 

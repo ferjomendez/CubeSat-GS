@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -203,3 +204,20 @@ async def test_sync_is_idempotent_after_partial_batch(tmp_path):
     h = await st.health()
     assert h["pending_sync"] == 0
     await st.stop()
+
+
+# ---- R1: a read-only Storage (create_session=False) must never purge
+
+async def test_read_only_storage_does_not_purge(tmp_path):
+    cfg = _cfg(tmp_path)  # mongo disabled
+    st1 = Storage(EventBus(), cfg, tmp_path, sync_interval=1000)
+    await st1.start()
+    old_ts = datetime.now(timezone.utc) - timedelta(days=400)
+    await st1._sqlite.insert("raw_packets", {"timestamp": old_ts, "apid": 1, "raw_hex": "AA"})
+    await st1.stop()
+
+    st2 = Storage(EventBus(), cfg, tmp_path, sync_interval=1000)
+    await st2.start(create_session=False)  # exporter-style read-only open on the same DB file
+    stats = await st2.stats()
+    assert stats["raw_packets"] == 1  # must still be there: a read-only open must never mutate
+    await st2.stop()
