@@ -23,7 +23,7 @@ Ref = tuple[str, str]  # ("mongo" | "sqlite", id)
 _SYNC_ORDER = ("raw_packets", "sessions", "passes", "commands", "decoded_telemetry", "alarms")
 _PACKET_REF_COLLECTIONS = ("decoded_telemetry", "alarms")
 _SYNC_BATCH = 200
-_TIME_KEYS = ("timestamp", "start_time", "end_time")
+_TIME_KEYS = ("timestamp", "start_time", "end_time", "aos", "los")
 
 
 def _restore_datetimes(doc: dict) -> None:
