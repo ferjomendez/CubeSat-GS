@@ -17,11 +17,10 @@ from cubesat_gs.core.station import GroundStation, setup_logging  # noqa: E402
 log = logging.getLogger("main")
 
 
-def _restore_signal_handlers(handlers: dict[int, tuple[str, int | None]]) -> None:
+def _restore_signal_handlers(handlers: dict[int, tuple[str, object]], loop: asyncio.AbstractEventLoop) -> None:
     """Restore signal handlers to their original state."""
     for sig, (method, old_handler) in handlers.items():
         if method == "add_signal_handler":
-            loop = asyncio.get_event_loop()
             loop.remove_signal_handler(sig)
         else:  # method == "signal.signal"
             signal.signal(sig, old_handler)
@@ -31,6 +30,7 @@ async def run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     setup_logging(cfg.logging, cfg.base_dir.parent, args.log_level)
 
+    sim = None
     sim_server = None
     if args.sim:
         from cubesat_gs.tests.serial_simulator import ModemSimulator, serve_tcp
@@ -42,7 +42,7 @@ async def run(args: argparse.Namespace) -> int:
     station = GroundStation(cfg)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
-    handlers: dict[int, tuple[str, int | None]] = {}
+    handlers: dict[int, tuple[str, object]] = {}
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, stop.set)
@@ -51,17 +51,19 @@ async def run(args: argparse.Namespace) -> int:
             old_handler = signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
             handlers[sig] = ("signal.signal", old_handler)
 
-    await station.start()
-    log.info("ground station running; Ctrl+C to stop")
     try:
+        await station.start()
+        log.info("ground station running; Ctrl+C to stop")
         await stop.wait()
     finally:
         log.info("ground station stopping")
         await station.stop()
+        if sim is not None:
+            await sim.stop()
         if sim_server is not None:
             sim_server.close()
             await sim_server.wait_closed()
-        _restore_signal_handlers(handlers)
+        _restore_signal_handlers(handlers, loop)
     return 0
 
 

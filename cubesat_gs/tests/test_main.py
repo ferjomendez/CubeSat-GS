@@ -4,8 +4,10 @@ import asyncio
 import signal
 from pathlib import Path
 
+import pytest
 import yaml
 
+import cubesat_gs.main as main_mod
 from cubesat_gs.main import run
 
 PKG = Path(__file__).resolve().parents[1]
@@ -44,3 +46,57 @@ async def test_sim_mode_starts_and_stops_on_sigint(tmp_path, monkeypatch):
     assert rc == 0
     text = log_file.read_text(encoding="utf-8", errors="ignore")
     assert "ground station stopping" in text
+
+
+async def test_run_cleans_up_when_station_start_fails(tmp_path, monkeypatch):
+    """F8: station.stop() and the --sim cleanup must run even if station.start() raises."""
+    monkeypatch.delenv("MONGO_URI", raising=False)
+    calls = []
+
+    class FakeStation:
+        def __init__(self, cfg, **kwargs):
+            pass
+
+        async def start(self):
+            raise RuntimeError("boom")
+
+        async def stop(self):
+            calls.append("station_stop")
+
+    class FakeSim:
+        def __init__(self, **kwargs):
+            pass
+
+        async def stop(self):
+            calls.append("sim_stop")
+
+    class FakeServer:
+        def close(self):
+            calls.append("server_close")
+
+        async def wait_closed(self):
+            calls.append("server_wait_closed")
+
+    async def fake_serve_tcp(sim, host, port):
+        return FakeServer(), 0
+
+    monkeypatch.setattr(main_mod, "GroundStation", FakeStation)
+    monkeypatch.setattr("cubesat_gs.tests.serial_simulator.ModemSimulator", FakeSim)
+    monkeypatch.setattr("cubesat_gs.tests.serial_simulator.serve_tcp", fake_serve_tcp)
+
+    cfg = {
+        "serial": {"port": "auto", "reconnect_interval": 0.2},
+        "commands": {"registry": str(PKG / "config" / "commands.yaml")},
+        "telemetry": {"definitions": str(PKG / "config" / "telemetry_defs.yaml")},
+        "database": {"local_fallback_path": str(tmp_path / "gs.db")},
+        "logging": {"level": "INFO", "file": str(tmp_path / "gs.log")},
+    }
+    cfg_path = tmp_path / "gs_config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    args = argparse.Namespace(config=str(cfg_path), sim=True, sim_beacon_interval=1.0,
+                              sim_rssi=False, log_level="INFO")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await asyncio.wait_for(run(args), 5.0)
+
+    assert calls == ["station_stop", "sim_stop", "server_close", "server_wait_closed"]

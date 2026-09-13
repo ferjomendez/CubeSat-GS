@@ -25,6 +25,7 @@ def setup_logging(cfg: LoggingConfig, base_dir: Path, level_override: str | None
     root.setLevel(level)
     for h in list(root.handlers):
         root.removeHandler(h)
+        h.close()
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     root.addHandler(console)

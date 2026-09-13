@@ -1,4 +1,5 @@
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,8 @@ def _mgr(tmp_path, bus=None, serial=None, yaml_text=None, **cfg):
     if yaml_text:
         path = tmp_path / "cmds.yaml"
         path.write_text(yaml_text, encoding="utf-8")
-    conf = CommandConfig(max_retries=cfg.pop("max_retries", 1), retry_backoff=0.01, **cfg)
+    conf = CommandConfig(max_retries=cfg.pop("max_retries", 1),
+                         retry_backoff=cfg.pop("retry_backoff", 0.01), **cfg)
     return bus, serial, TelecommandManager(bus, serial, FakeFreq(), ccsds.PacketBuilder(), conf, path)
 
 
@@ -97,6 +99,26 @@ async def test_timeout_then_retry_then_success(tmp_path):
     rec = await m.send_command("PING")
     assert rec.status == "responded" and rec.attempts == 2
     assert len(ser.sent) == 2
+
+
+BACKOFF_YAML = """
+commands:
+  - {name: PING, apid: 100, payload: "PING", response_apid: 101, timeout: 0.05}
+"""
+
+
+async def test_retry_backoff_delays(tmp_path):
+    """F9: the retry backoff sleep (retry_backoff ** attempt) must actually elapse."""
+    bus = EventBus()
+    ser = FakeSerial(bus, reply=False)  # never replies: every attempt times out
+    bus, ser, m = _mgr(tmp_path, bus=bus, serial=ser, yaml_text=BACKOFF_YAML,
+                      max_retries=2, retry_backoff=0.05)
+    t0 = time.monotonic()
+    rec = await m.send_command("PING")
+    elapsed = time.monotonic() - t0
+    assert rec.status == "timeout" and rec.attempts == 3
+    min_expected = 0.05 * 3 + 0.05 + 0.0025  # three timeouts + delays 0.05**1, 0.05**2
+    assert min_expected <= elapsed < 1.0
 
 
 async def test_timeout_exhausted(tmp_path):
