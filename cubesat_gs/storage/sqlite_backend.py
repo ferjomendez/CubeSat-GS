@@ -39,10 +39,19 @@ def time_field(collection: str) -> str:
     return TIME_FIELD.get(collection, "timestamp")
 
 
+def _to_utc_iso(dt: datetime) -> str:
+    """Convert datetime to UTC ISO string, normalizing naive or non-UTC datetimes."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat()
+
+
 def to_jsonable(value: Any) -> Any:
-    """datetime -> ISO string, bytes -> hex, recursively."""
+    """datetime -> UTC ISO string, bytes -> hex, recursively."""
     if isinstance(value, datetime):
-        return value.isoformat()
+        return _to_utc_iso(value)
     if isinstance(value, (bytes, bytearray)):
         return bytes(value).hex().upper()
     if isinstance(value, dict):
@@ -54,7 +63,7 @@ def to_jsonable(value: Any) -> Any:
 
 def _iso(value: Any) -> str:
     if isinstance(value, datetime):
-        return value.isoformat()
+        return _to_utc_iso(value)
     if value is None:
         return datetime.now(timezone.utc).isoformat()
     return str(value)
@@ -108,9 +117,13 @@ class SQLiteBackend:
         return str(cur.lastrowid)
 
     async def insert_many(self, collection: str, docs: list[dict]) -> list[str]:
+        t = _check(collection)
         ids = []
         for d in docs:
-            ids.append(await self.insert(collection, d))
+            cur = await self._conn.execute(
+                f"INSERT INTO {t}(ts, apid, doc) VALUES (?, ?, ?)", self._row(t, d))
+            ids.append(str(cur.lastrowid))
+        await self._conn.commit()
         return ids
 
     async def update(self, collection: str, id: str, fields: dict) -> None:

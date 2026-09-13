@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -79,3 +80,58 @@ async def test_purge_only_synced_old_rows(db):
 async def test_unknown_collection_rejected(db):
     with pytest.raises(ValueError):
         await db.insert("nope", {"timestamp": _t()})
+
+
+async def test_insert_many_single_commit(db):
+    """Verify insert_many uses single commit for all rows and returns consecutive IDs."""
+    commit_count = 0
+    original_commit = db._conn.commit
+
+    async def counting_commit():
+        nonlocal commit_count
+        commit_count += 1
+        await original_commit()
+
+    # Patch commit to count calls
+    db._conn.commit = counting_commit
+
+    # Insert 3 documents
+    ids = await db.insert_many("raw_packets", [
+        {"timestamp": _t(i), "apid": 5, "v": i} for i in range(3)
+    ])
+
+    # Restore original commit
+    db._conn.commit = original_commit
+
+    # Verify consecutive IDs and single commit
+    assert ids == ["1", "2", "3"]
+    assert commit_count == 1
+    assert await db.count("raw_packets") == 3
+
+
+async def test_datetimes_normalised_to_utc(db):
+    """Verify datetimes are normalized to UTC before storage and filtering."""
+    # Insert with non-UTC timezone (17:00 UTC-5 = 22:00 UTC)
+    non_utc_tz = timezone(timedelta(hours=-5))
+    i1 = await db.insert("raw_packets", {
+        "timestamp": datetime(2026, 9, 13, 17, 0, tzinfo=non_utc_tz),
+        "apid": 1
+    })
+
+    # Insert with naive datetime (treated as UTC)
+    i2 = await db.insert("raw_packets", {
+        "timestamp": datetime(2026, 9, 13, 12, 0),
+        "apid": 2
+    })
+
+    # Retrieve and verify ISO strings end with +00:00 and have correct UTC times
+    doc1 = await db.get("raw_packets", i1)
+    doc2 = await db.get("raw_packets", i2)
+
+    assert doc1["timestamp"] == "2026-09-13T22:00:00+00:00"
+    assert doc2["timestamp"] == "2026-09-13T12:00:00+00:00"
+
+    # Verify filtering with UTC start time returns only doc1 (which is at 22:00 UTC)
+    rows = await db.query("raw_packets", start=datetime(2026, 9, 13, 15, 0, tzinfo=timezone.utc))
+    assert len(rows) == 1
+    assert rows[0]["id"] == i1
