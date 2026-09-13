@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -118,18 +119,48 @@ def test_state_at_with_naive_datetime():
 
 
 async def test_cache_race_condition_on_config_change():
+    """Verify that stale results are not cached when config changes during search.
+
+    Without the generation counter fix, stale results from an in-flight search
+    would overwrite the cache after set_min_elevation() increments the counter,
+    causing the cache to become out-of-sync with configuration.
+    """
     pp, clock = _pp()
-    # Start upcoming() as a task
+
+    # Wrap _search to count calls and block on first call until released
+    search_call_count = {"count": 0}
+    block_event = threading.Event()
+    original_search = pp._search
+
+    def search_wrapper(start, days):
+        search_call_count["count"] += 1
+        # Block on first call until released (threading.Event works in threads)
+        if search_call_count["count"] == 1:
+            block_event.wait()
+        return original_search(start, days)
+
+    pp._search = search_wrapper
+
+    # Start upcoming() as a task (will block in _search)
     task = asyncio.create_task(pp.upcoming())
-    # Yield control to let the task start
-    await asyncio.sleep(0.001)
-    # Invalidate cache while task is computing
+    await asyncio.sleep(0.02)  # Let it enter _search in thread
+
+    # Invalidate cache while task is blocked
     await pp.set_min_elevation(30)
-    # Await the task
+
+    # Release the blocked _search call
+    block_event.set()
+
+    # Wait for the task to complete
     result1 = await task
-    # Call upcoming again and verify it recomputed
+
+    # Verify stale cache was NOT written: _cache_at should still be None
+    # (cache was invalidated by set_min_elevation, and the search result
+    # should have been discarded due to generation counter)
+    assert pp._cache_at is None, "Stale cache was incorrectly written"
+    assert search_call_count["count"] == 1
+
+    # Call upcoming again and verify it runs _search again
     result2 = await pp.upcoming()
-    # The cached result should be different or the cache should be fresh
-    # We verify this by checking that set_min_elevation invalidated the cache
-    # by checking that the generation counter changed
-    assert len(result2) <= len(result1) or result1 != result2
+    assert search_call_count["count"] == 2, "Second upcoming() should trigger _search again"
+    assert pp._cache_at is not None, "Cache should be set after second search"
