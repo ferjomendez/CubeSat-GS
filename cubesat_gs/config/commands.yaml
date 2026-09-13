@@ -1,0 +1,11 @@
+# Telecommand registry. payload: UTF-8 string, or hex prefixed with 0x (e.g. "0x01FF").
+# response_apid: APID expected in reply (null = fire-and-forget, completes on modem TX ack).
+# critical: true requires confirm=True from the caller (dashboard shows a confirmation dialog).
+commands:
+  - name: PING
+    description: "Liveness check; satellite answers PONG_DATA_<value> on APID 101"
+    apid: 100
+    payload: "PING"
+    response_apid: 101
+    timeout: 10
+    critical: false
