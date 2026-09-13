@@ -20,20 +20,18 @@ PONG_PAYLOAD = b"PONG_DATA_6.28"
 class ModemSimulator:
     def __init__(self, *, beacon_interval: float = 10.0, length_includes_crc: bool = True,
                  sequence_scope: Literal["global", "per_apid"] = "global", fake_rssi: bool = False,
-                 ping_apid: int = ccsds.APID_TELECOMMAND, tctm_mhz: float = 435.5,
-                 beacon_mhz: float = 437.25) -> None:
+                 tctm_mhz: float = 435.5, beacon_mhz: float = 437.25) -> None:
         self.beacon_interval = beacon_interval
         self.length_includes_crc = length_includes_crc
         self.sequence_scope = sequence_scope
         self.fake_rssi = fake_rssi
-        self.ping_apid = ping_apid
         self.tctm_mhz = tctm_mhz
         self.beacon_mhz = beacon_mhz
 
         self.freq: float = tctm_mhz
         self.received_tx: list[bytes] = []
         self.beacons_sent = 0
-        self.silent = False  # when True, never send OK:* (simulates a dead/failing modem)
+        self.silent = False  # when True, the modem emits nothing (dead/failing modem)
         self._counters: dict[int | None, int] = {}
         self._out: asyncio.Queue[str] = asyncio.Queue()
         self._beacon_task: asyncio.Task | None = None
@@ -55,29 +53,33 @@ class ModemSimulator:
     async def handle_line(self, line: str) -> None:
         line = line.strip()
         if line.startswith("TX:"):
+            valid_hex = True
             try:
                 raw = bytes.fromhex(line[3:])
             except ValueError:
                 log.warning("sim: bad hex in %r", line)
-                return
-            self.received_tx.append(raw)
-            if self.silent:
-                return
-            self._out.put_nowait("OK:TX_DONE")
-            if self.freq == self.tctm_mhz and b"PING" in raw[ccsds.HEADER_LEN:]:
-                self._spawn(self._reply_pong())
+                valid_hex = False
+            if valid_hex:
+                self.received_tx.append(raw)
+                if self.freq == self.tctm_mhz and b"PING" in raw[ccsds.HEADER_LEN:]:
+                    self._spawn(self._reply_pong())
+            self._emit("OK:TX_DONE")
         elif line.startswith("FREQ:"):
             try:
                 self.freq = float(line[5:])
             except ValueError:
                 return  # real firmware stays silent on failure
-            if not self.silent:
-                self._out.put_nowait("OK:FREQ_SET")
+            self._emit("OK:FREQ_SET")
         else:
             log.debug("sim: ignoring %r", line)
 
     async def read_line(self) -> str:
         return await self._out.get()
+
+    def _emit(self, line: str) -> None:
+        """Emit a line to the output queue, subject to silent mode."""
+        if not self.silent:
+            self._out.put_nowait(line)
 
     # ---- RF side
     def inject_rx(self, raw: bytes, rssi: float | None = None, snr: float | None = None) -> None:
@@ -87,7 +89,7 @@ class ModemSimulator:
             snr = 8.25 if snr is None else snr
         if rssi is not None and snr is not None:
             line += f"|RSSI:{rssi}|SNR:{snr}"
-        self._out.put_nowait(line)
+        self._emit(line)
 
     def emit_beacon(self) -> None:
         self.inject_rx(self._build(ccsds.APID_BEACON, BEACON_PAYLOAD))

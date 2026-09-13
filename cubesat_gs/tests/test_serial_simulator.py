@@ -68,3 +68,23 @@ async def test_simulated_serial_streams():
     assert (await reader.readline()) == b"OK:FREQ_SET\n"
     ser.close_from_modem_side()
     assert (await reader.readline()) == b""  # EOF
+
+
+async def test_bad_tx_hex_still_acks():
+    sim = ModemSimulator(beacon_interval=1000)
+    await sim.handle_line("TX:BADH3X")
+    assert await sim.read_line() == "OK:TX_DONE"
+    assert sim.received_tx == []
+
+
+async def test_silent_suppresses_everything():
+    sim = ModemSimulator(beacon_interval=1000)
+    sim.silent = True
+    await sim.handle_line("FREQ:437.25")
+    await sim.handle_line("TX:" + ccsds.build(100, b"PING", sequence_count=0).hex())
+    sim.inject_rx(b"\x00\x0a\xc0\x00\x00\x03ab")
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(sim.read_line(), 0.1)
+    sim.silent = False
+    await sim.handle_line("FREQ:435.5")
+    assert await sim.read_line() == "OK:FREQ_SET"
