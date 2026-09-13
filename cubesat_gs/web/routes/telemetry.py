@@ -9,6 +9,7 @@ from cubesat_gs.core.station import GroundStation
 from cubesat_gs.core.telemetry import NUMERIC_TYPES  # struct formats keyed by type name
 from cubesat_gs.web.deps import ApiError, get_station
 from cubesat_gs.web.lttb import lttb
+from cubesat_gs.web.schemas import TelemetryDefsOut, TelemetryHistoryOut, TelemetryLatestOut
 
 router = APIRouter()
 
@@ -20,7 +21,7 @@ def _defs(station: GroundStation) -> list[dict]:
             for apid, d in sorted(station.decoder.definitions.items())]
 
 
-@router.get("/telemetry/latest")
+@router.get("/telemetry/latest", response_model=TelemetryLatestOut)
 async def telemetry_latest(station: GroundStation = Depends(get_station)):
     latest = {}
     for apid, d in station.decoder.last_values.items():
@@ -29,13 +30,13 @@ async def telemetry_latest(station: GroundStation = Depends(get_station)):
     return {"latest": latest, "definitions": _defs(station)}
 
 
-@router.get("/telemetry/definitions")
+@router.get("/telemetry/definitions", response_model=TelemetryDefsOut)
 async def telemetry_definitions(station: GroundStation = Depends(get_station)):
     path = station.cfg.resolve(station.cfg.telemetry.definitions)
     return {"yaml": path.read_text(encoding="utf-8"), "definitions": _defs(station)}
 
 
-@router.get("/telemetry/history")
+@router.get("/telemetry/history", response_model=TelemetryHistoryOut)
 async def telemetry_history(station: GroundStation = Depends(get_station), apid: int = Query(...),
                             field: str = Query(...), start: datetime | None = None,
                             end: datetime | None = None, max_points: int = Query(600, ge=10, le=2000)):

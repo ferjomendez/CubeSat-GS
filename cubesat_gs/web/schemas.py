@@ -157,6 +157,21 @@ class TelemetryHistoryOut(BaseModel):
     total_rows: int
 
 
+class PacketsPageOut(BaseModel):
+    items: list[FeedEntry]
+    next_before: str | None
+
+
+class TelemetryLatestOut(BaseModel):
+    latest: dict[int, TelemetryLatest]
+    definitions: list[TelemetryDefOut]
+
+
+class TelemetryDefsOut(BaseModel):
+    yaml: str
+    definitions: list[TelemetryDefOut]
+
+
 class CommandDefOut(BaseModel):
     name: str
     description: str

@@ -78,3 +78,44 @@ async def test_telemetry_history_downsamples(web_stack, tmp_path):
     assert r.json()["points"] == [] and r.json()["total_rows"] == 0
     r = await client.get("/api/telemetry/history", params={"apid": 10, "field": "message"})
     assert r.status_code == 422  # non-numeric field
+
+
+async def test_cursor_pagination_identical_timestamps(web_stack):
+    """Verify no duplicate rows when multiple rows share identical timestamps."""
+    station, sim, client = web_stack
+    base = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
+    # Write >=3 rows with identical timestamp
+    for i in range(5):
+        await station.storage.write("raw_packets", {
+            "timestamp": base, "apid": 10, "direction": "rx", "raw_hex": f"0A{i:02X}" + "00" * 10,
+            "sequence_count": i, "rssi": -100.0, "snr": 5.0, "frequency_mhz": 437.0})
+    # Page with limit=2, verify no duplicates in multi-page fetch
+    r1 = await client.get("/api/packets", params={"limit": 2})
+    assert r1.status_code == 200
+    body1 = r1.json()
+    ids1 = {item["id"] for item in body1["items"]}
+    assert len(ids1) == 2 and body1["next_before"]
+    r2 = await client.get("/api/packets", params={"limit": 2, "before": body1["next_before"]})
+    assert r2.status_code == 200
+    body2 = r2.json()
+    ids2 = {item["id"] for item in body2["items"]}
+    assert len(ids2) == 2 and body2["next_before"]
+    # Verify no overlap between pages
+    assert len(ids1 & ids2) == 0, f"Duplicate IDs across pages: {ids1 & ids2}"
+
+
+async def test_telemetry_field_order(web_stack):
+    """Verify decoded fields appear in definition order for multi-field packets."""
+    station, sim, client = web_stack
+    await _seed(station, 2)
+    # Get beacon packets (APID 10) which have fields
+    r = await client.get("/api/packets", params={"limit": 100, "apid": 10})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    beacon = next((i for i in items if i["apid"] == 10 and i["fields"]), None)
+    assert beacon is not None, "No Beacon packet with fields found"
+    # Verify field order matches definition
+    defs = station.decoder.definitions[10]
+    expected_order = [f.name for f in defs.fields]
+    actual_order = [f["name"] for f in beacon["fields"]]
+    assert actual_order == expected_order, f"Field order mismatch: expected {expected_order}, got {actual_order}"
