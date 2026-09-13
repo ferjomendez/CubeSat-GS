@@ -103,6 +103,32 @@ class FrequencyChanged:
     ts: datetime = field(default_factory=now)
 
 
+@dataclass(frozen=True)
+class PassStarted:
+    pass_: Any   # pass_predictor.Pass
+    ts: datetime = field(default_factory=now)
+
+
+@dataclass(frozen=True)
+class PassEnded:
+    pass_: Any
+    packets_received: int
+    ts: datetime = field(default_factory=now)
+
+
+@dataclass(frozen=True)
+class PassUpdate:
+    state: Any   # pass_predictor.PassState
+    ts: datetime = field(default_factory=now)
+
+
+@dataclass(frozen=True)
+class CommandStarted:
+    name: str
+    raw_hex: str
+    ts: datetime = field(default_factory=now)
+
+
 # ---------------------------------------------------------------- bus
 
 class EventBus:

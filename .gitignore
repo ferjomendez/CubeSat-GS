@@ -19,6 +19,9 @@ venv/
 # Node (Phase 2)
 node_modules/
 dist/
+cubesat_gs/web/frontend/node_modules/
+cubesat_gs/web/frontend/dist/
+cubesat_gs/data/exports/
 
 # OS / editor
 .DS_Store

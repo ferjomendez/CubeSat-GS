@@ -12,8 +12,8 @@ import aiosqlite
 
 log = logging.getLogger(__name__)
 
-COLLECTIONS = ("raw_packets", "decoded_telemetry", "commands", "sessions", "alarms")
-TIME_FIELD = {"sessions": "start_time"}
+COLLECTIONS = ("raw_packets", "decoded_telemetry", "commands", "sessions", "alarms", "passes")
+TIME_FIELD = {"sessions": "start_time", "passes": "aos"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS {t} (

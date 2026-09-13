@@ -13,14 +13,14 @@ from pymongo.errors import BulkWriteError, PyMongoError
 from cubesat_gs.core import ccsds
 from cubesat_gs.core.config import DatabaseConfig
 from cubesat_gs.core.events import (AlarmRaised, CommandCompleted, EventBus, PacketDecoded,
-                                    PacketReceived, PacketSent, now)
+                                    PacketReceived, PacketSent, PassEnded, PassStarted, now)
 from cubesat_gs.storage.mongo_backend import MongoBackend
 from cubesat_gs.storage.sqlite_backend import COLLECTIONS, SQLiteBackend
 
 log = logging.getLogger(__name__)
 
 Ref = tuple[str, str]  # ("mongo" | "sqlite", id)
-_SYNC_ORDER = ("raw_packets", "sessions", "commands", "decoded_telemetry", "alarms")
+_SYNC_ORDER = ("raw_packets", "sessions", "passes", "commands", "decoded_telemetry", "alarms")
 _PACKET_REF_COLLECTIONS = ("decoded_telemetry", "alarms")
 _SYNC_BATCH = 200
 _TIME_KEYS = ("timestamp", "start_time", "end_time")
@@ -56,6 +56,8 @@ class Storage:
         self._sync_lock = asyncio.Lock()
         self.session: dict[str, Any] = {}
         self._session_ref: Ref | None = None
+        self.pass_counters: dict[str, int] = {"packets_received": 0, "packets_sent": 0, "commands_sent": 0}
+        self._pass_ref: Ref | None = None
 
     # ---- lifecycle
     async def start(self, *, create_session: bool = True) -> None:
@@ -110,7 +112,8 @@ class Storage:
     def _handlers(self):
         return ((PacketReceived, self._on_packet_received), (PacketSent, self._on_packet_sent),
                 (PacketDecoded, self._on_decoded), (AlarmRaised, self._on_alarm),
-                (CommandCompleted, self._on_command))
+                (CommandCompleted, self._on_command), (PassStarted, self._on_pass_started),
+                (PassEnded, self._on_pass_ended))
 
     # ---- routing
     @property
@@ -198,6 +201,8 @@ class Storage:
                "apid": peek[0] if peek else None, "sequence_count": peek[1] if peek else None}
         ref = await self.write("raw_packets", doc)
         self.session["packets_received"] += 1
+        if self.session.get("pass_id"):
+            self.pass_counters["packets_received"] += 1
         if not fut.done():
             fut.set_result(ref)
 
@@ -208,6 +213,8 @@ class Storage:
             "raw_hex": ev.raw.hex().upper(), "rssi": None, "snr": None, "crc_valid": True,
             "apid": peek[0] if peek else None, "sequence_count": peek[1] if peek else None})
         self.session["packets_sent"] += 1
+        if self.session.get("pass_id"):
+            self.pass_counters["packets_sent"] += 1
 
     async def _on_decoded(self, ev: PacketDecoded) -> None:
         ref = await self._ref_for(ev.source)
@@ -232,6 +239,24 @@ class Storage:
             "timestamp": r.ts, "command_name": r.name, "raw_hex_sent": r.raw_hex,
             "response_received": r.status == "responded", "response_hex": r.response_hex,
             "latency_ms": r.latency_ms, "status": r.status, "attempts": r.attempts})
+        if r.status != "refused" and self.session.get("pass_id"):
+            self.pass_counters["commands_sent"] += 1
+
+    async def _on_pass_started(self, ev: PassStarted) -> None:
+        p = ev.pass_
+        self.session["pass_id"] = p.id
+        self.pass_counters = {"packets_received": 0, "packets_sent": 0, "commands_sent": 0}
+        self._pass_ref = await self.write("passes", {
+            "pass_id": p.id, "aos": p.aos, "los": p.los, "max_el": p.max_el,
+            "packets_received": 0, "packets_sent": 0, "commands_sent": 0})
+        await self._flush_session()
+
+    async def _on_pass_ended(self, ev: PassEnded) -> None:
+        if self._pass_ref is not None:
+            await self._update(self._pass_ref, "passes", dict(self.pass_counters))
+        self._pass_ref = None
+        self.session["pass_id"] = None
+        await self._flush_session()
 
     # ---- sessions
     async def _flush_session(self) -> None:
@@ -239,7 +264,7 @@ class Storage:
             return
         try:
             await self._update(self._session_ref, "sessions", {
-                k: self.session[k] for k in ("end_time", "packets_received", "packets_sent", "notes")})
+                k: self.session[k] for k in ("end_time", "packets_received", "packets_sent", "pass_id", "notes")})
         except Exception as e:  # noqa: BLE001
             log.warning("storage: session flush failed: %s", e)
 

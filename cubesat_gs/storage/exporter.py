@@ -22,6 +22,7 @@ COLUMNS: dict[str, list[str]] = {
                  "response_hex", "latency_ms", "status", "attempts"],
     "sessions": ["id", "start_time", "end_time", "pass_id", "packets_received", "packets_sent", "notes"],
     "alarms": ["id", "timestamp", "packet_id", "apid", "field_name", "value", "threshold", "alarm_type"],
+    "passes": ["id", "pass_id", "aos", "los", "max_el", "packets_received", "packets_sent", "commands_sent"],
 }
 
 
