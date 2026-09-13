@@ -5,10 +5,11 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 
 from cubesat_gs.core.station import GroundStation
 from cubesat_gs.web.deps import install_error_handlers
+from cubesat_gs.web.hub import WebSocketHub
 from cubesat_gs.web.routes import status as status_routes
 
 log = logging.getLogger(__name__)
@@ -19,7 +20,14 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 def create_app(station: GroundStation, *, static_dir: Path | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        yield
+        hub = WebSocketHub(station)
+        app.state.hub = hub
+        await hub.start()
+        try:
+            yield
+        finally:
+            await hub.stop()
+            app.state.hub = None
 
     app = FastAPI(title="CubeSat GS", version="2.0", lifespan=lifespan, docs_url="/api/docs",
                   openapi_url="/api/openapi.json", redoc_url=None)
@@ -28,4 +36,13 @@ def create_app(station: GroundStation, *, static_dir: Path | None = None) -> Fas
     app.state.static_dir = static_dir or STATIC_DIR
     install_error_handlers(app)
     app.include_router(status_routes.router, prefix="/api")
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        hub: WebSocketHub | None = app.state.hub
+        if hub is None:
+            await websocket.close(code=1013)
+            return
+        await hub.handle(websocket)
+
     return app
