@@ -277,7 +277,6 @@ class PassPredictor:
         """Start the pass scheduler task."""
         if self._task is None:
             self._task = asyncio.create_task(self._loop(), name="pass-scheduler")
-            await asyncio.sleep(0)  # yield control to let the task start
 
     async def stop(self) -> None:
         """Stop the pass scheduler task."""
@@ -328,16 +327,17 @@ class PassPredictor:
                 await self.refresh_tle()
             except TLEError as e:
                 log.warning("passes: %s (keeping previous TLE)", e)
-        if self._last_recompute is None or t - self._last_recompute >= _CACHE_TTL:
+        if self._last_recompute is None or self._cache_at is None or t - self._last_recompute >= _CACHE_TTL:
             await self.upcoming(force=True)
             self._last_recompute = t
         state = self.current()
         if state is not None and self._active is None:
-            self._active = next(p for p in self._cache if p.id == state.pass_id)
-            self._bus.publish(PassStarted(pass_=self._active))
+            active = next((p for p in self._cache if p.id == state.pass_id), None)
+            if active is not None:
+                self._active = active
+                self._bus.publish(PassStarted(pass_=self._active))
         if state is not None:
             self._bus.publish(PassUpdate(state=state))
         if state is None and self._active is not None:
             ended, self._active = self._active, None
             self._bus.publish(PassEnded(pass_=ended, packets_received=int(self._counters().get("packets_received", 0))))
-        await self._bus.drain()

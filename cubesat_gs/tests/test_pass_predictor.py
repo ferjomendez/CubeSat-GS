@@ -172,6 +172,15 @@ from cubesat_gs.core.events import PassEnded, PassStarted, PassUpdate
 from cubesat_gs.core.pass_predictor import pass_to_dict, state_to_dict
 
 
+async def _wait_for(pred, timeout=2.0):
+    """Poll a condition with deadline; raise AssertionError if not met in time."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not pred():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.01)
+
+
 async def test_scheduler_emits_aos_update_los():
     bus = EventBus()
     got = []
@@ -190,11 +199,10 @@ async def test_scheduler_emits_aos_update_los():
     await pp.start()
     p = (await pp.upcoming())[0]
     clock["t"] = p.aos + timedelta(seconds=1)
-    await asyncio.sleep(0.1)
-    assert any(isinstance(e, PassStarted) and e.pass_.id == p.id for e in got)
-    assert sum(isinstance(e, PassUpdate) for e in got) >= 2
+    await _wait_for(lambda: any(isinstance(e, PassStarted) and e.pass_.id == p.id for e in got))
+    await _wait_for(lambda: sum(isinstance(e, PassUpdate) for e in got) >= 2)
     clock["t"] = p.los + timedelta(seconds=1)
-    await asyncio.sleep(0.1)
+    await _wait_for(lambda: any(isinstance(e, PassEnded) for e in got))
     ended = [e for e in got if isinstance(e, PassEnded)]
     assert len(ended) == 1 and ended[0].packets_received == 7
     await pp.stop()
@@ -239,3 +247,22 @@ async def test_to_dict_helpers():
     s = state_to_dict(pp.current())
     assert s["pass_id"] == p.id and set(s) == {"pass_id", "t", "az", "el", "range_km", "doppler_hz", "progress"}
     assert state_to_dict(None) is None
+
+
+async def test_scheduler_recomputes_on_invalidation():
+    """Verify cache is recomputed immediately when invalidated, not waiting for hourly timer."""
+    bus = EventBus()
+    clock = {"t": NOW}
+    pp = PassPredictor(bus, StationConfig(latitude=-33.35, longitude=-70.67, altitude=500),
+                       SatelliteConfig(name="ISS", tle_line1=L1, tle_line2=L2),
+                       PassConfig(min_elevation=10, prediction_days=1), tctm_mhz=435.5,
+                       clock=lambda: clock["t"], update_interval=0.02)
+    await pp.start()
+    # Wait for scheduler to populate cache
+    await _wait_for(lambda: pp.next_pass() is not None)
+    old_count = len(pp._cache)
+    # Change min elevation to 30° (filter out lower passes)
+    await pp.set_min_elevation(30)
+    # Wait for scheduler to recompute cache (should happen immediately, not wait 1 hour)
+    await _wait_for(lambda: len(pp._cache) < old_count)
+    await pp.stop()
