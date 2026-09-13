@@ -94,6 +94,27 @@ def test_invalid_definitions_rejected(tmp_path):
         _decoder(tmp_path, "beacon:\n  name: x\n  fields: []\n")
 
 
+def test_alarm_thresholds_accept_quoted_numbers(tmp_path):
+    """F7: alarm_low/alarm_high are coerced with float(), so a quoted YAML scalar is fine."""
+    d = _decoder(tmp_path,
+                'apid_1:\n  name: x\n  fields:\n'
+                '    - {name: v, type: float32, alarm_low: "3.3", alarm_high: "4.2"}\n')
+    fd = d.definitions[1].fields[0]
+    assert fd.alarm_low == pytest.approx(3.3) and fd.alarm_high == pytest.approx(4.2)
+
+
+def test_invalid_alarm_thresholds_and_length_rejected(tmp_path):
+    with pytest.raises(TelemetryDefError, match="alarm_low"):
+        _decoder(tmp_path,
+                'apid_1:\n  name: x\n  fields:\n    - {name: v, type: float32, alarm_low: abc}\n')
+    with pytest.raises(TelemetryDefError, match="length"):
+        _decoder(tmp_path,
+                'apid_1:\n  name: x\n  fields:\n    - {name: v, type: string, length: x}\n')
+    with pytest.raises(TelemetryDefError, match="alarm_high"):
+        _decoder(tmp_path,
+                'apid_1:\n  name: x\n  fields:\n    - {name: v, type: string, alarm_high: 5}\n')
+
+
 async def test_bus_flow_decoded_alarm_gap_malformed(tmp_path):
     bus = EventBus()
     path = tmp_path / "defs.yaml"

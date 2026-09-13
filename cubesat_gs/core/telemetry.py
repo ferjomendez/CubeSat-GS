@@ -80,11 +80,32 @@ def _parse_field(apid_key: str, raw: dict) -> FieldDef:
         raise TelemetryDefError(f"{where}: 'length' is only valid for string/bytes")
     if t not in _NUMERIC and ("scale" in raw or "offset" in raw):
         raise TelemetryDefError(f"{where}: 'scale'/'offset' only valid for numeric types")
+    if t not in _NUMERIC and (raw.get("alarm_low") is not None or raw.get("alarm_high") is not None):
+        raise TelemetryDefError(f"{where}: 'alarm_low'/'alarm_high' only valid for numeric types")
+    alarm_low = alarm_high = None
+    if raw.get("alarm_low") is not None:
+        try:
+            alarm_low = float(raw["alarm_low"])
+        except (TypeError, ValueError) as e:
+            raise TelemetryDefError(f"{where}: 'alarm_low' must be a number, got {raw['alarm_low']!r}") from e
+    if raw.get("alarm_high") is not None:
+        try:
+            alarm_high = float(raw["alarm_high"])
+        except (TypeError, ValueError) as e:
+            raise TelemetryDefError(f"{where}: 'alarm_high' must be a number, got {raw['alarm_high']!r}") from e
+    length = None
+    if raw.get("length") is not None:
+        try:
+            length = int(raw["length"])
+        except (TypeError, ValueError) as e:
+            raise TelemetryDefError(f"{where}: 'length' must be an integer, got {raw['length']!r}") from e
+        if length < 0:
+            raise TelemetryDefError(f"{where}: 'length' must be >= 0, got {length}")
     return FieldDef(
         name=str(raw["name"]), type=t, unit=raw.get("unit"),
         scale=float(raw.get("scale", 1.0)), offset=float(raw.get("offset", 0.0)),
-        alarm_low=raw.get("alarm_low"), alarm_high=raw.get("alarm_high"),
-        length=raw.get("length"), encoding=str(raw.get("encoding", "utf-8")),
+        alarm_low=alarm_low, alarm_high=alarm_high,
+        length=length, encoding=str(raw.get("encoding", "utf-8")),
     )
 
 
