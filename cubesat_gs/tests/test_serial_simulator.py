@@ -88,3 +88,21 @@ async def test_silent_suppresses_everything():
     sim.silent = False
     await sim.handle_line("FREQ:435.5")
     assert await sim.read_line() == "OK:FREQ_SET"
+
+
+async def test_tcp_server_speaks_modem_protocol():
+    from cubesat_gs.tests.serial_simulator import serve_tcp
+    sim = ModemSimulator(beacon_interval=1000)
+    server, port = await serve_tcp(sim, "127.0.0.1", 0)
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"FREQ:437.25\n")
+        await writer.drain()
+        assert (await asyncio.wait_for(reader.readline(), 1.0)) == b"OK:FREQ_SET\n"
+        sim.inject_rx(b"\x00\x0a\xc0\x00\x00\x03ab")
+        assert (await asyncio.wait_for(reader.readline(), 1.0)) == b"RX:000AC00000036162\n"
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        server.close()
+        await server.wait_closed()

@@ -31,7 +31,8 @@ async def test_export_csv(st, tmp_path):
     out = tmp_path / "raw.csv"
     n = await export(st, "raw_packets", out, fmt="csv")
     assert n == 3
-    rows = list(csv.DictReader(out.open(encoding="utf-8")))
+    with out.open(encoding="utf-8", newline="") as fh:
+        rows = list(csv.DictReader(fh))
     assert list(rows[0].keys()) == COLUMNS["raw_packets"]
     assert [r["raw_hex"] for r in rows] == ["00", "01", "02"]
     assert rows[0]["rssi"] == ""

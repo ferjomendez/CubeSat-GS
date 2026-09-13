@@ -177,3 +177,68 @@ class SimulatedSerial:
             self._pump.cancel()
         if self._reader:
             self._reader.feed_eof()
+
+
+# ---------------------------------------------------------------- TCP transport (serial.port = "socket://host:port")
+
+async def serve_tcp(sim: ModemSimulator, host: str, port: int) -> tuple[asyncio.AbstractServer, int]:
+    """Serve the modem protocol over TCP. One client at a time gets the output stream."""
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        peer = writer.get_extra_info("peername")
+        log.info("sim: client connected %s", peer)
+
+        async def pump() -> None:
+            while True:
+                line = await sim.read_line()
+                writer.write(line.encode() + b"\n")
+                await writer.drain()
+
+        pump_task = asyncio.create_task(pump())
+        try:
+            while True:
+                data = await reader.readline()
+                if not data:
+                    break
+                await sim.handle_line(data.decode(errors="ignore"))
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            pump_task.cancel()
+            writer.close()
+            log.info("sim: client disconnected %s", peer)
+
+    server = await asyncio.start_server(handle, host, port)
+    bound = server.sockets[0].getsockname()[1]
+    await sim.start()
+    return server, bound
+
+
+async def _main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="ESP32 LoRa modem + OBC simulator over TCP")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=5000)
+    ap.add_argument("--beacon-interval", type=float, default=10.0)
+    ap.add_argument("--rssi", action="store_true", help="append |RSSI|SNR to RX lines")
+    ap.add_argument("--per-apid-seq", action="store_true", help="standard per-APID sequence counters")
+    ap.add_argument("--standard-length", action="store_true", help="data_length excludes CRC (strict CCSDS)")
+    a = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    sim = ModemSimulator(beacon_interval=a.beacon_interval, fake_rssi=a.rssi,
+                         sequence_scope="per_apid" if a.per_apid_seq else "global",
+                         length_includes_crc=not a.standard_length)
+    server, port = await serve_tcp(sim, a.host, a.port)
+    log.info("sim: listening on %s:%d — set serial.port: \"socket://%s:%d\"", a.host, port, a.host, port)
+    try:
+        await server.serve_forever()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        await sim.stop()
+        server.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(_main()))
