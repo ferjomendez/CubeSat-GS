@@ -164,3 +164,78 @@ async def test_cache_race_condition_on_config_change():
     result2 = await pp.upcoming()
     assert search_call_count["count"] == 2, "Second upcoming() should trigger _search again"
     assert pp._cache_at is not None, "Cache should be set after second search"
+
+
+import httpx
+
+from cubesat_gs.core.events import PassEnded, PassStarted, PassUpdate
+from cubesat_gs.core.pass_predictor import pass_to_dict, state_to_dict
+
+
+async def test_scheduler_emits_aos_update_los():
+    bus = EventBus()
+    got = []
+
+    async def on(ev):
+        got.append(ev)
+
+    for t in (PassStarted, PassUpdate, PassEnded):
+        bus.subscribe(t, on)
+    clock = {"t": NOW}
+    counters = {"packets_received": 7, "packets_sent": 0, "commands_sent": 0}
+    pp = PassPredictor(bus, StationConfig(latitude=-33.35, longitude=-70.67, altitude=500),
+                       SatelliteConfig(name="ISS", tle_line1=L1, tle_line2=L2),
+                       PassConfig(min_elevation=10, prediction_days=1), tctm_mhz=435.5,
+                       clock=lambda: clock["t"], counters=lambda: counters, update_interval=0.02)
+    await pp.start()
+    p = (await pp.upcoming())[0]
+    clock["t"] = p.aos + timedelta(seconds=1)
+    await asyncio.sleep(0.1)
+    assert any(isinstance(e, PassStarted) and e.pass_.id == p.id for e in got)
+    assert sum(isinstance(e, PassUpdate) for e in got) >= 2
+    clock["t"] = p.los + timedelta(seconds=1)
+    await asyncio.sleep(0.1)
+    ended = [e for e in got if isinstance(e, PassEnded)]
+    assert len(ended) == 1 and ended[0].packets_received == 7
+    await pp.stop()
+
+
+async def test_refresh_tle_picks_named_entry():
+    text = ("OTHER SAT\n1 00001U 00000A   24007.50000000  .00000000  00000+0  00000-0 0  9998\n"
+            "2 00001  51.0000 200.0000 0001000  90.0000 270.0000 15.50000000000000\n"
+            f"ISS (ZARYA)\n{L1}\n{L2}\n")
+
+    def handler(request):
+        assert request.url.host == "tle.example"
+        return httpx.Response(200, text=text)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    pp, _ = _pp(tle=("", ""))
+    pp._tle_source = "https://tle.example/sats.txt"
+    l1, l2 = await pp.refresh_tle(client=client)
+    assert (l1, l2) == (L1, L2) and pp.enabled
+    await client.aclose()
+
+
+async def test_refresh_tle_failure_keeps_old():
+    def handler(request):
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    pp, _ = _pp()
+    pp._tle_source = "https://tle.example/sats.txt"
+    with pytest.raises(TLEError):
+        await pp.refresh_tle(client=client)
+    assert pp.tle == (L1, L2)
+    await client.aclose()
+
+
+async def test_to_dict_helpers():
+    pp, clock = _pp()
+    p = (await pp.upcoming())[0]
+    d = pass_to_dict(p)
+    assert d["id"] == p.id and d["aos"] == p.aos.isoformat() and d["max_el"] == p.max_el
+    clock["t"] = p.tca
+    s = state_to_dict(pp.current())
+    assert s["pass_id"] == p.id and set(s) == {"pass_id", "t", "az", "el", "range_km", "doppler_hz", "progress"}
+    assert state_to_dict(None) is None

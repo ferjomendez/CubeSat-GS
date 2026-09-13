@@ -10,6 +10,7 @@ from cubesat_gs.core import ccsds
 from cubesat_gs.core.config import GSConfig, LoggingConfig
 from cubesat_gs.core.events import EventBus
 from cubesat_gs.core.frequency_manager import FrequencyManager
+from cubesat_gs.core.pass_predictor import PassPredictor, pass_to_dict, state_to_dict
 from cubesat_gs.core.serial_handler import SerialHandler
 from cubesat_gs.core.telecommand import TelecommandManager
 from cubesat_gs.core.telemetry import TelemetryDecoder
@@ -53,16 +54,21 @@ class GroundStation:
         self.telecommand = TelecommandManager(self.bus, self.serial, self.freq, self.builder,
                                               cfg.commands, cfg.resolve(cfg.commands.registry))
         self.storage = Storage(self.bus, cfg.database, pkg_dir, mongo_client_factory=mongo_client_factory)
+        self.passes = PassPredictor(self.bus, cfg.station, cfg.satellite, cfg.passes,
+                                    tctm_mhz=cfg.frequencies.tctm,
+                                    counters=lambda: self.storage.pass_counters)
 
     async def start(self) -> None:
         log.info("ground station %r starting", self.cfg.station.name)
         await self.storage.start()
+        await self.passes.start()
         self.decoder.start()
         self.freq.start()
         await self.serial.start()  # last: its ConnectionChanged(True) triggers the initial FREQ
 
     async def stop(self) -> None:
         log.info("ground station stopping")
+        await self.passes.stop()
         await self.serial.stop()
         self.freq.stop()
         self.decoder.stop()
@@ -76,4 +82,7 @@ class GroundStation:
             "pending_command": self.telecommand.pending.as_dict() if self.telecommand.pending else None,
             "storage": {"mongo": self.storage.state},
             "session": dict(self.storage.session),
+            "passes": {"enabled": self.passes.enabled, "reason": self.passes.reason,
+                       "next": pass_to_dict(self.passes.next_pass()),
+                       "current": state_to_dict(self.passes.current())},
         }

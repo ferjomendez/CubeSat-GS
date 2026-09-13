@@ -94,3 +94,10 @@ async def test_survives_modem_unplug(gs):
     await _wait_until(lambda: station.serial.connected)
     await station.freq.set_mode(Mode.BEACON_LISTEN)  # modem answers on the new link
     assert sim.freq == 437.25
+
+
+async def test_station_exposes_pass_predictor(gs):
+    station, sim, _ser = gs
+    st = station.status()
+    assert st["passes"]["enabled"] is False and "TLE" in st["passes"]["reason"]
+    assert st["passes"]["next"] is None and st["passes"]["current"] is None

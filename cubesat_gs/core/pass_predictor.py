@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import httpx
 import logging
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from dataclasses import asdict, dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 from skyfield.api import EarthSatellite, load, wgs84
 
 from cubesat_gs.core.config import PassConfig, SatelliteConfig, StationConfig
-from cubesat_gs.core.events import EventBus, now
+from cubesat_gs.core.events import EventBus, PassEnded, PassStarted, PassUpdate, now
 
 log = logging.getLogger(__name__)
 
@@ -50,10 +51,54 @@ def _pass_id(aos: datetime) -> str:
     return hashlib.sha1(aos.replace(microsecond=0).isoformat().encode()).hexdigest()[:8]
 
 
+def pass_to_dict(p: Pass | None) -> dict | None:
+    """Convert a Pass to a dict with datetime fields as ISO strings."""
+    if p is None:
+        return None
+    d = asdict(p)
+    for k in ("aos", "los", "tca"):
+        d[k] = d[k].isoformat()
+    return d
+
+
+def state_to_dict(s: PassState | None) -> dict | None:
+    """Convert a PassState to a dict with datetime field as ISO string."""
+    if s is None:
+        return None
+    d = asdict(s)
+    d["t"] = d["t"].isoformat()
+    return d
+
+
+def parse_tle_text(text: str, name: str | None) -> tuple[str, str]:
+    """Pick (line1, line2) for `name` (case-insensitive substring) from a 2/3-line TLE file, else the first."""
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    entries: list[tuple[str, str, str]] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("1 ") and i + 1 < len(lines) and lines[i + 1].startswith("2 "):
+            title = lines[i - 1] if i > 0 and not lines[i - 1].startswith(("1 ", "2 ")) else ""
+            entries.append((title, lines[i], lines[i + 1]))
+            i += 2
+        else:
+            i += 1
+    if not entries:
+        raise TLEError("no TLE entries found")
+    if name:
+        key = name.strip().lower()
+        for title, l1, l2 in entries:
+            if key in title.lower():
+                return l1, l2
+    return entries[0][1], entries[0][2]
+
+
 class PassPredictor:
     def __init__(self, bus: EventBus, station_cfg: StationConfig, satellite_cfg: SatelliteConfig,
                  passes_cfg: PassConfig, *, tctm_mhz: float,
-                 clock: Callable[[], datetime] = now) -> None:
+                 clock: Callable[[], datetime] = now,
+                 counters: Callable[[], dict] | None = None,
+                 update_interval: float = 1.0,
+                 http_client_factory: Callable[[], httpx.AsyncClient] | None = None) -> None:
         self._bus = bus
         self._clock = clock
         self._ts = load.timescale(builtin=True)
@@ -71,6 +116,14 @@ class PassPredictor:
         self._cache_gen = 0
         self._lock = asyncio.Lock()
         self._observer = wgs84.latlon(self._lat, self._lon, elevation_m=self._alt)
+        self._counters = counters or (lambda: {"packets_received": 0})
+        self._update_interval = update_interval
+        self._http_factory = http_client_factory or (lambda: httpx.AsyncClient(timeout=10.0))
+        self._tle_source = satellite_cfg.tle_source or ""
+        self._task: asyncio.Task | None = None
+        self._active: Pass | None = None
+        self._last_recompute: datetime | None = None
+        self._last_tle_refresh_day: date | None = None
         self._load_tle(satellite_cfg.tle_line1, satellite_cfg.tle_line2)
 
     # ---- configuration
@@ -218,3 +271,73 @@ class PassPredictor:
             return pts
 
         return await asyncio.to_thread(_compute)
+
+    # ---- scheduler
+    async def start(self) -> None:
+        """Start the pass scheduler task."""
+        if self._task is None:
+            self._task = asyncio.create_task(self._loop(), name="pass-scheduler")
+            await asyncio.sleep(0)  # yield control to let the task start
+
+    async def stop(self) -> None:
+        """Stop the pass scheduler task."""
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._task = None
+
+    async def refresh_tle(self, client: httpx.AsyncClient | None = None) -> tuple[str, str]:
+        """Fetch and parse TLE from tle_source URL. Raises TLEError on failure."""
+        if not self._tle_source:
+            raise TLEError("satellite.tle_source is not set")
+        own = client is None
+        client = client or self._http_factory()
+        try:
+            r = await client.get(self._tle_source)
+            r.raise_for_status()
+            l1, l2 = parse_tle_text(r.text, self._name)
+        except (httpx.HTTPError, TLEError) as e:
+            raise TLEError(f"TLE fetch failed: {e}") from e
+        finally:
+            if own:
+                await client.aclose()
+        await self.set_tle(l1, l2)
+        log.info("passes: TLE refreshed from %s", self._tle_source)
+        return l1, l2
+
+    async def _loop(self) -> None:
+        """Main scheduler loop: runs _tick() repeatedly, handles exceptions."""
+        while True:
+            try:
+                await self._tick()
+            except Exception:  # noqa: BLE001 - the scheduler must survive anything
+                log.exception("passes: scheduler tick failed")
+            await asyncio.sleep(self._update_interval)
+
+    async def _tick(self) -> None:
+        """One scheduler tick: check TLE refresh, recompute passes, emit events."""
+        if not self.enabled:
+            return
+        t = self._clock()
+        if self._tle_source and t.hour == 3 and self._last_tle_refresh_day != t.date():
+            self._last_tle_refresh_day = t.date()
+            try:
+                await self.refresh_tle()
+            except TLEError as e:
+                log.warning("passes: %s (keeping previous TLE)", e)
+        if self._last_recompute is None or t - self._last_recompute >= _CACHE_TTL:
+            await self.upcoming(force=True)
+            self._last_recompute = t
+        state = self.current()
+        if state is not None and self._active is None:
+            self._active = next(p for p in self._cache if p.id == state.pass_id)
+            self._bus.publish(PassStarted(pass_=self._active))
+        if state is not None:
+            self._bus.publish(PassUpdate(state=state))
+        if state is None and self._active is not None:
+            ended, self._active = self._active, None
+            self._bus.publish(PassEnded(pass_=ended, packets_received=int(self._counters().get("packets_received", 0))))
+        await self._bus.drain()
