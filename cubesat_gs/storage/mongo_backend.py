@@ -127,7 +127,7 @@ class MongoBackend:
     async def iterate(self, collection: str, *, start=None, end=None, apid=None,
                       batch: int = 500) -> AsyncIterator[dict]:
         c = _check(collection)
-        cur = self._db[c].find(self._filter(c, start, end, apid)).sort(time_field(c), ASCENDING)
+        cur = self._db[c].find(self._filter(c, start, end, apid)).sort(time_field(c), ASCENDING).batch_size(int(batch))
         async for d in cur:
             yield _public(d)
 

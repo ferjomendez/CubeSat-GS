@@ -63,3 +63,12 @@ async def test_errors_propagate(mb):
     assert await b.ping() is False
     with pytest.raises(PyMongoError):
         await b.insert("raw_packets", {"timestamp": _t()})
+
+
+async def test_iterate_sets_batch_size(mb):
+    client, b = mb
+    await b.insert("raw_packets", {"timestamp": _t(0), "apid": 10, "raw_hex": b"\xaa"})
+    async for _ in b.iterate("raw_packets", batch=7):
+        pass
+    db = client["cubesat_gs"]
+    assert db["raw_packets"].last_cursor.batch_size_used == 7

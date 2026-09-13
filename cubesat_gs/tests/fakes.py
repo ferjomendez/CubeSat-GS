@@ -10,6 +10,7 @@ from pymongo.errors import AutoReconnect
 class _Cursor:
     def __init__(self, docs: list[dict]):
         self._docs = docs
+        self.batch_size_used = None
 
     def sort(self, key: str, direction: int):
         self._docs = sorted(self._docs, key=lambda d: d.get(key), reverse=direction < 0)
@@ -17,6 +18,10 @@ class _Cursor:
 
     def limit(self, n: int):
         self._docs = self._docs[:n]
+        return self
+
+    def batch_size(self, n: int):
+        self.batch_size_used = n
         return self
 
     def __aiter__(self):
@@ -57,6 +62,7 @@ class FakeCollection:
         self._client = client
         self.docs: list[dict] = []
         self.indexes: list[tuple] = []
+        self.last_cursor = None
 
     def _guard(self):
         if self._client.fail:
@@ -86,7 +92,8 @@ class FakeCollection:
 
     def find(self, flt: dict | None = None) -> _Cursor:
         self._guard()
-        return _Cursor([dict(d) for d in self.docs if _match(d, flt or {})])
+        self.last_cursor = _Cursor([dict(d) for d in self.docs if _match(d, flt or {})])
+        return self.last_cursor
 
     async def count_documents(self, flt: dict) -> int:
         self._guard()
