@@ -128,9 +128,10 @@ class WebSocketHub:
         await ws.accept()
         c = _Client(ws, self._queue_size)
         self._clients.add(c)
-        await ws.send_text(json.dumps(ws_message("snapshot", self.snapshot()), default=str))
-        sender = asyncio.create_task(self._sender(c))
+        sender = None
         try:
+            await ws.send_text(json.dumps(ws_message("snapshot", self.snapshot()), default=str))
+            sender = asyncio.create_task(self._sender(c))
             while True:
                 try:
                     raw = await ws.receive_text()
@@ -141,16 +142,23 @@ class WebSocketHub:
                 except ValueError:
                     continue
                 if isinstance(msg, dict) and msg.get("type") == "ping":
-                    c.queue.put_nowait(json.dumps(ws_message("pong", {})))
+                    try:
+                        c.queue.put_nowait(json.dumps(ws_message("pong", {})))
+                    except asyncio.QueueFull:
+                        log.warning("ws: dropping slow client (pong)")
+                        self._clients.discard(c)
+                        await self._close(c, 1013)
+                        break
         finally:
             self._clients.discard(c)
-            if not c.queue.full():
-                c.queue.put_nowait(None)
-            sender.cancel()
-            try:
-                await sender
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+            if sender is not None:
+                if not c.queue.full():
+                    c.queue.put_nowait(None)
+                sender.cancel()
+                try:
+                    await sender
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
 
     async def _sender(self, c: _Client) -> None:
         while True:

@@ -118,3 +118,45 @@ async def test_feed_snapshot_includes_recent(web_stack):
     assert len(ws.of("snapshot")[0]["data"]["feed"]) >= 2
     ws.disconnect()
     await task
+
+
+async def test_snapshot_send_failure_drops_client(web_stack):
+    station, sim, client = web_stack
+    hub = client._transport.app.state.hub
+
+    class FailingSnapshotWs(WsClient):
+        async def send_text(self, text):
+            if json.loads(text)["type"] == "snapshot":
+                raise RuntimeError("snapshot send failed")
+            self.sent.append(json.loads(text))
+
+    ws = FailingSnapshotWs()
+    task = asyncio.create_task(hub.handle(ws))
+    try:
+        await task
+    except RuntimeError:
+        pass  # Expected: snapshot send fails
+    assert hub.client_count == 0
+
+
+async def test_pong_on_full_queue_drops_client(web_stack):
+    station, sim, client = web_stack
+    hub = client._transport.app.state.hub
+    hub._queue_size = 2  # Very small to trigger QueueFull quickly
+
+    class SlowSendWs(WsClient):
+        async def send_text(self, text):
+            if json.loads(text)["type"] != "snapshot":
+                await asyncio.Event().wait()  # Block sender on all non-snapshot
+            self.sent.append(json.loads(text))
+
+    ws = SlowSendWs()
+    task = asyncio.create_task(hub.handle(ws))
+    await wait_until(lambda: ws.accepted)
+    # Send 3 pings; first fills queue, subsequent ones hit QueueFull
+    ws._incoming.put_nowait(json.dumps({"type": "ping"}))
+    ws._incoming.put_nowait(json.dumps({"type": "ping"}))
+    ws._incoming.put_nowait(json.dumps({"type": "ping"}))
+    await wait_until(lambda: ws.closed == 1013, timeout=3.0)
+    await task
+    assert hub.client_count == 0
