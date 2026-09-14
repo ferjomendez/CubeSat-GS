@@ -56,6 +56,15 @@ def _yaml() -> YAML:
     return y
 
 
+def _validate_tle_format(tle_line: str, line_num: int) -> None:
+    """Validate that a TLE line has the correct format (starts with line number)."""
+    stripped = (tle_line or "").strip()
+    if not stripped:
+        return  # Empty lines are validated elsewhere
+    if not stripped.startswith(f"{line_num} "):
+        raise TLEError(f"TLE line {line_num} must start with '{line_num} '")
+
+
 def _validate_types(sections: dict[str, dict[str, Any]]) -> None:
     """Validate that values match the expected types of their config fields."""
     nested_types = {
@@ -117,6 +126,12 @@ def validate_merge(path: Path, sections: dict[str, dict[str, Any]]) -> dict[str,
     """Return the merged plain dict after building a GSConfig from it (raises ValueError if invalid)."""
     check_sections(sections)
     _validate_types(sections)
+    # Validate TLE line format
+    if "satellite" in sections:
+        if "tle_line1" in sections["satellite"]:
+            _validate_tle_format(sections["satellite"]["tle_line1"], 1)
+        if "tle_line2" in sections["satellite"]:
+            _validate_tle_format(sections["satellite"]["tle_line2"], 2)
     y = _yaml()
     with open(path, "r", encoding="utf-8") as fh:
         doc = y.load(fh) or {}
@@ -189,10 +204,13 @@ async def apply_live(station, sections: dict[str, dict[str, Any]]) -> list[str]:
     if "satellite" in sections:
         station.passes.set_tle_source(cfg.satellite.tle_source)
         if "tle_line1" in sections["satellite"] or "tle_line2" in sections["satellite"]:
+            # Build TLE pair from request with fallback to current config
+            l1 = sections["satellite"].get("tle_line1", cfg.satellite.tle_line1)
+            l2 = sections["satellite"].get("tle_line2", cfg.satellite.tle_line2)
             # Validate TLE first, then set in config only if validation succeeds
-            await station.passes.set_tle(sections["satellite"]["tle_line1"], sections["satellite"]["tle_line2"])
-            cfg.satellite.tle_line1 = sections["satellite"]["tle_line1"]
-            cfg.satellite.tle_line2 = sections["satellite"]["tle_line2"]
+            await station.passes.set_tle(l1, l2)
+            cfg.satellite.tle_line1 = l1
+            cfg.satellite.tle_line2 = l2
             if "tle_line1" in sections["satellite"]:
                 applied.append("satellite.tle_line1")
             if "tle_line2" in sections["satellite"]:

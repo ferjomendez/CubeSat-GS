@@ -118,3 +118,31 @@ async def test_put_config_rejects_invalid_types(cfg_stack):
     # int value for float field should succeed (backward compat)
     r = await client.put("/api/config", json={"sections": {"passes": {"min_elevation": 15}}})
     assert r.status_code == 200
+
+
+async def test_put_tle_partial_update_line2_only(cfg_stack):
+    from cubesat_gs.tests.test_pass_predictor import L1, L2
+    station, sim, client, cfg_path = cfg_stack
+    # Set valid TLE first
+    r = await client.put("/api/config", json={"sections": {"satellite": {"tle_line1": L1, "tle_line2": L2}}})
+    assert r.status_code == 200 and station.passes.enabled
+    # Update only tle_line2 with the same valid line 2
+    r = await client.put("/api/config", json={"sections": {"satellite": {"tle_line2": L2}}})
+    assert r.status_code == 200
+    # Both lines should still be valid
+    assert station.cfg.satellite.tle_line1 == L1 and station.cfg.satellite.tle_line2 == L2
+    assert station.passes.enabled
+
+
+async def test_put_tle_partial_update_junk_line1_only(cfg_stack):
+    from cubesat_gs.tests.test_pass_predictor import L1, L2
+    station, sim, client, cfg_path = cfg_stack
+    # Set valid TLE first
+    r = await client.put("/api/config", json={"sections": {"satellite": {"tle_line1": L1, "tle_line2": L2}}})
+    assert r.status_code == 200 and station.passes.enabled
+    # Try to update only tle_line1 with junk - should fail
+    r = await client.put("/api/config", json={"sections": {"satellite": {"tle_line1": "junk"}}})
+    assert r.status_code == 422 and r.json()["error"] == "invalid_tle"
+    # Config should be unchanged
+    assert station.cfg.satellite.tle_line1 == L1 and station.cfg.satellite.tle_line2 == L2
+    assert station.passes.enabled
