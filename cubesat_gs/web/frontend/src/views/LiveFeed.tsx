@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { api } from "@/api/client";
 import type { Direction, FeedEntry, Kind, PacketsPageOut } from "@/api/types";
@@ -18,16 +18,8 @@ type RangeFilter = "all" | "10m" | "1h";
 const KINDS: Kind[] = ["beacon", "telemetry", "command", "malformed", "unknown"];
 const RANGE_MS: Record<RangeFilter, number | null> = { all: null, "10m": 10 * 60_000, "1h": 60 * 60_000 };
 
-/**
- * Wraps the default rect observer to ignore a degenerate 0x0 report — jsdom has no layout engine, so
- * `element.offsetWidth/offsetHeight` are always 0, and the default observer would otherwise clobber
- * `initialRect` with that on mount before any real measurement exists.
- */
-const safeObserveElementRect: typeof observeElementRect = (instance, cb) =>
-  observeElementRect(instance, (rect) => {
-    if (rect.width === 0 && rect.height === 0) return;
-    cb(rect);
-  });
+/** Backend cursor format (`feed.py`'s `_parse_cursor`): `<iso ts>|<row id>`. */
+const cursorOf = (e: FeedEntry): string => `${e.ts}|${e.id}`;
 
 /** Live packet feed: toolbar filters, a virtualised scroll body, and a "Load older" page fetch. */
 export default function LiveFeed() {
@@ -48,14 +40,21 @@ export default function LiveFeed() {
 
   const infinite = useInfiniteQuery({
     queryKey: ["packets", direction, kind, singleApid],
-    queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
-      api.get<PacketsPageOut>("/api/packets", {
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
+      // The first page has no cursor from the backend yet. Without one, `/api/packets` would
+      // return the newest persisted packets — the same ones already in `feed` (the hub snapshot
+      // hydrates from that same storage) — duplicating the live rows. Seed the first page from the
+      // oldest *currently* live entry instead, read at fetch time so a feed that's grown or
+      // trimmed since render doesn't shift the anchor.
+      const before = pageParam ?? (feed.length > 0 ? cursorOf(feed[feed.length - 1]) : undefined);
+      return api.get<PacketsPageOut>("/api/packets", {
         limit: 50,
-        before: pageParam,
+        before,
         direction: direction === "all" ? undefined : direction,
         kind: kind === "all" ? undefined : kind,
         apid: singleApid,
-      }),
+      });
+    },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: PacketsPageOut) => last.next_before ?? undefined,
     enabled: false,
@@ -81,10 +80,18 @@ export default function LiveFeed() {
     };
   }, [direction, kind, apids, range]);
 
-  const rows = useMemo(
-    () => [...feed.filter(passesFilters), ...older.filter(passesFilters)],
-    [feed, older, passesFilters],
-  );
+  const rows = useMemo(() => {
+    const seen = new Set<string>();
+    const combined: FeedEntry[] = [];
+    // Live rows take priority over older/paginated ones sharing the same id (defensive: keeps a
+    // single copy even if a fetched page happens to overlap the live feed).
+    for (const e of [...feed.filter(passesFilters), ...older.filter(passesFilters)]) {
+      if (seen.has(e.id)) continue;
+      seen.add(e.id);
+      combined.push(e);
+    }
+    return combined;
+  }, [feed, older, passesFilters]);
 
   const loadOlder = () => void infinite.fetchNextPage();
   const canLoadOlder = !infinite.data || infinite.hasNextPage;
@@ -96,7 +103,6 @@ export default function LiveFeed() {
     estimateSize: () => 28,
     overscan: 8,
     initialRect: { width: 800, height: 600 },
-    observeElementRect: safeObserveElementRect,
   });
 
   const toggleApid = (apid: number) => {
@@ -197,11 +203,7 @@ export default function LiveFeed() {
                 <div
                   key={row.id}
                   data-index={vi.index}
-                  ref={(node) => {
-                    // Guard against jsdom (no real layout: offsetHeight is always 0), which would
-                    // otherwise overwrite the estimated row height with a bogus zero.
-                    if (node && node.offsetHeight > 0) virtualizer.measureElement(node);
-                  }}
+                  ref={virtualizer.measureElement}
                   style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
                 >
                   <FeedRow entry={row} expanded={expanded === row.id} onToggle={() => setExpanded((e) => (e === row.id ? null : row.id))} />
