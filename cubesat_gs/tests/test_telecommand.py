@@ -164,9 +164,9 @@ async def test_busy_wrong_mode_unknown(tmp_path):
 
 async def test_send_raw_and_payload_override(tmp_path):
     bus, ser, m = _mgr(tmp_path, yaml_text=CRIT_YAML)
-    rec = await m.send_raw("DEADBEEF")
+    rec = await m.send_raw("DEADBEEF", confirm=True)
     assert rec.name == "RAW" and rec.status == "acked" and ser.sent[-1] == b"\xde\xad\xbe\xef"
     with pytest.raises(ValueError):
-        await m.send_raw("XYZ")
+        await m.send_raw("XYZ", confirm=True)
     rec = await m.send_command("PING", payload_override=b"PING2")
     assert ser.sent[-1][6:] == b"PING2" and rec.status == "responded"

@@ -117,11 +117,16 @@ class TelecommandManager:
         return await self._execute(cdef.name, self._builder.build(cdef.apid, payload),
                                    cdef.response_apid, cdef.timeout)
 
-    async def send_raw(self, hex_str: str) -> CommandRecord:
+    async def send_raw(self, hex_str: str, *, confirm: bool = False) -> CommandRecord:
         try:
             raw = bytes.fromhex(hex_str.replace(" ", ""))
         except ValueError as e:
             raise ValueError(f"invalid hex: {hex_str!r}") from e
+        if not confirm:
+            rec = CommandRecord(now(), "RAW", raw.hex().upper(), "refused",
+                                error="raw commands require confirm=True")
+            self._finish(rec)
+            return rec
         return await self._execute("RAW", raw, None, self._cfg.default_timeout)
 
     # ---- core

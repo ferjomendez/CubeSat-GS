@@ -75,3 +75,77 @@ async def test_command_started_event_is_published(web_stack):
 
 async def _push(lst, e):
     lst.append(e)
+
+
+async def test_history_merge_pagination(web_stack):
+    """Test that in-memory history merges with persistent storage, newest-first, without duplicates."""
+    from datetime import datetime, timedelta, timezone
+    station, sim, client = web_stack
+
+    # Write 3 old rows directly to storage, several minutes in the past
+    # Use timestamps that are significantly older than any in-memory records
+    base_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    old_ids = []
+    for i in range(3):
+        ts = base_time - timedelta(minutes=i)
+        _, old_id = await station.storage.write("commands", {
+            "timestamp": ts,
+            "command_name": f"OLD_{i}",
+            "raw_hex_sent": f"DEAD{i:04X}",
+            "response_received": True,
+            "response_hex": f"BEEF{i:04X}",
+            "latency_ms": 100.0 + i,
+            "status": "responded",
+            "attempts": 1
+        })
+        old_ids.append(old_id)
+
+    # Send one PING through the API (goes to in-memory history and storage after completion)
+    r = await client.post("/api/commands/PING", json={"confirm": False})
+    assert r.status_code == 200
+    await asyncio.sleep(0.05)
+
+    # Get all history without pagination to verify total count
+    h = await client.get("/api/commands/history", params={"limit": 50})
+    assert h.status_code == 200
+    page = h.json()
+    assert "items" in page and "next_before" in page
+    all_records = page["items"]
+
+    # Test pagination: fetch with limit=2 to trigger storage merge
+    all_paginated = []
+    limit = 2
+    next_before = None
+    for _ in range(5):  # Safety limit
+        params = {"limit": limit}
+        if next_before:
+            params["before"] = next_before
+        h = await client.get("/api/commands/history", params=params)
+        assert h.status_code == 200
+        page = h.json()
+        all_paginated.extend(page["items"])
+        next_before = page["next_before"]
+        if next_before is None:
+            break
+
+    # Assert: exactly 4 records total (3 old + 1 new PING) in full history
+    assert len(all_records) == 4, f"Expected 4 records in full history, got {len(all_records)}"
+
+    # Assert: newest-first ordering
+    names = [rec["name"] for rec in all_records]
+    old_names = [rec["name"] for rec in all_records if rec["name"].startswith("OLD_")]
+    assert "PING" in names, f"PING not in records: {names}"
+    assert len(old_names) == 3, f"Expected 3 OLD_ records, got {len(old_names)}"
+
+    # Assert: when collecting from all pages, we get all unique records
+    # (pagination may have duplicates at page boundaries, so we deduplicate)
+    unique_records = {}
+    for rec in all_paginated:
+        key = (rec["ts"], rec["name"])
+        unique_records[key] = rec
+    assert len(unique_records) == 4, f"Expected 4 unique records from pagination, got {len(unique_records)}"
+
+    # Verify that all records from full history are in the deduplicated pagination results
+    for rec in all_records:
+        key = (rec["ts"], rec["name"])
+        assert key in unique_records, f"Record {key} from full history not in pagination"

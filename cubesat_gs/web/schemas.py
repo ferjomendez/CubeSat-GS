@@ -183,6 +183,11 @@ class CommandDefOut(BaseModel):
     critical: bool
 
 
+class CommandHistoryOut(BaseModel):
+    items: list[CommandRecordOut]
+    next_before: str | None
+
+
 class SendCommandIn(BaseModel):
     confirm: bool = False
     payload_hex: str | None = None
