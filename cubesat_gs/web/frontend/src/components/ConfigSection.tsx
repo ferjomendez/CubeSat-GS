@@ -25,11 +25,20 @@ function toDraft(values: Record<string, unknown>, fields: ConfigField[]): Record
   return out;
 }
 
+/** A numeric field's raw draft is invalid once emptied/whitespace or not parseable — `Number("")`
+ * is `0`, not "no value", so an emptied field must be caught here rather than trusted as a real 0. */
+function isInvalidNumber(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed === "" || Number.isNaN(Number(trimmed));
+}
+
 /**
  * One writable config section (`gs_config.yaml`): a local draft of `values`, a "live"/"restart"
  * badge per field (from `applies`), and a Save button enabled only once the draft differs from the
  * last-saved values. Save sends only the changed keys — numbers coerced with `Number()` — and shows
- * the outcome ("Applied live" or a restart notice) for 4 s.
+ * the outcome ("Applied live" or a restart notice) for 4 s. A numeric field left empty or non-numeric
+ * is invalid rather than treated as `0`: it's excluded from the save payload, shown with an inline
+ * error, and disables Save for the whole section until fixed.
  */
 export function ConfigSection({
   name,
@@ -61,15 +70,21 @@ export function ConfigSection({
     const out: Record<string, unknown> = {};
     for (const f of fields) {
       const raw = draft[f.key] ?? "";
-      const coerced: unknown = f.type === "number" ? Number(raw) : raw;
-      if (coerced !== values[f.key]) out[f.key] = coerced;
+      if (f.type === "number") {
+        if (isInvalidNumber(raw)) continue; // invalid — excluded; Save is disabled while this holds
+        const coerced = Number(raw);
+        if (coerced !== values[f.key]) out[f.key] = coerced;
+        continue;
+      }
+      if (raw !== values[f.key]) out[f.key] = raw;
     }
     return out;
   };
 
+  const anyInvalid = fields.some((f) => f.type === "number" && isInvalidNumber(draft[f.key] ?? ""));
   const changed = computeChanged();
   const changedKeys = Object.keys(changed);
-  const canSave = changedKeys.length > 0 && !saving;
+  const canSave = changedKeys.length > 0 && !saving && !anyInvalid;
 
   const setField = (key: string, value: string) => {
     setDirty(true);
@@ -126,14 +141,19 @@ export function ConfigSection({
                   onChange={(e) => setField(f.key, e.target.value)}
                 />
               ) : (
-                <Input
-                  id={id}
-                  type={f.type === "number" ? "number" : "text"}
-                  step={f.step}
-                  className="h-8"
-                  value={draft[f.key] ?? ""}
-                  onChange={(e) => setField(f.key, e.target.value)}
-                />
+                <>
+                  <Input
+                    id={id}
+                    type={f.type === "number" ? "number" : "text"}
+                    step={f.step}
+                    className="h-8"
+                    value={draft[f.key] ?? ""}
+                    onChange={(e) => setField(f.key, e.target.value)}
+                  />
+                  {f.type === "number" && isInvalidNumber(draft[f.key] ?? "") && (
+                    <p className="label text-alarm">Enter a number</p>
+                  )}
+                </>
               )}
             </div>
           );

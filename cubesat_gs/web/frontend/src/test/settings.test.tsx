@@ -44,4 +44,17 @@ describe("Settings", () => {
     expect(await screen.findByText(/edit gs_config.yaml and restart/i)).toBeInTheDocument();
     expect(await screen.findByText("12")).toBeInTheDocument();
   });
+  it("disables Save and shows an inline error when a numeric field is cleared, instead of shipping 0", async () => {
+    const calls = mockFetch();
+    render(<QueryClientProvider client={new QueryClient()}><Settings /></QueryClientProvider>);
+    const beacon = await screen.findByLabelText(/beacon/i);
+    fireEvent.change(beacon, { target: { value: "" } });
+    expect(screen.getByRole("button", { name: /save frequencies/i })).toBeDisabled();
+    expect(screen.getByText(/enter a number/i)).toBeInTheDocument();
+    fireEvent.change(beacon, { target: { value: "437.3" } });
+    expect(screen.getByRole("button", { name: /save frequencies/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /save frequencies/i }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ sections: { frequencies: { beacon: 437.3 } } });
+  });
 });
