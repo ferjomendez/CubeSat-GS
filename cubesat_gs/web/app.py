@@ -1,6 +1,7 @@
 """FastAPI application factory. Never constructs Phase 1 modules; wires the web layer onto a GroundStation."""
 from __future__ import annotations
 
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -61,7 +62,7 @@ def create_app(station: GroundStation, *, static_dir: Path | None = None) -> Fas
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str, request: Request):
-        if path.startswith("api/") or path == "ws":
+        if path == "api" or path.startswith("api/") or path == "ws":
             return JSONResponse({"error": "not_found", "detail": None}, status_code=404)
         index = app.state.static_dir / "index.html"
         candidate = app.state.static_dir / path if path else None
@@ -79,5 +80,10 @@ def serve(app: FastAPI, host: str, port: int) -> uvicorn.Server:
     """A uvicorn server that runs in the caller's loop and never installs its own signal handlers."""
     config = uvicorn.Config(app, host=host, port=port, loop="none", log_config=None, access_log=False)
     server = uvicorn.Server(config)
-    server.install_signal_handlers = lambda: None  # main.py owns SIGINT/SIGTERM
+    # uvicorn 0.52.4's Server has no `install_signal_handlers` attribute (that was an older
+    # API); Server.serve() unconditionally does `with self.capture_signals(): ...`, which
+    # installs its own signal.signal handlers for SIGINT/SIGTERM/SIGBREAK for the life of
+    # the call, replacing main.py's. Shadow it with a no-op context manager so main.py keeps
+    # owning process signals and stops uvicorn only via `server.should_exit = True`.
+    server.capture_signals = contextlib.nullcontext
     return server

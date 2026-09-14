@@ -17,11 +17,26 @@ from cubesat_gs.core.station import GroundStation, setup_logging  # noqa: E402
 log = logging.getLogger("main")
 
 
-async def _wait_started(server, timeout: float = 10.0) -> None:
+async def _serve_web(server) -> None:
+    """Run uvicorn's serve loop, converting its sys.exit(STARTUP_FAILURE) (raised inside
+    Server.startup() on a bind OSError) into an ordinary exception. A bare SystemExit
+    propagating out of this task would hit `except (KeyboardInterrupt, SystemExit): raise`
+    in asyncio.Task.__step, which the caller's `except Exception` cannot catch."""
+    try:
+        await server.serve()
+    except SystemExit as exc:
+        raise RuntimeError(f"uvicorn failed to start (exit {exc.code})") from exc
+
+
+async def _wait_started(server, server_task: asyncio.Task, timeout: float = 10.0) -> None:
+    """Poll for startup, but also notice if the server task already finished (e.g. it
+    failed to bind) so that failure surfaces here instead of waiting out the full timeout."""
     async def _w():
-        while not server.started:
+        while not server.started and not server_task.done():
             await asyncio.sleep(0.05)
     await asyncio.wait_for(_w(), timeout)
+    if server_task.done():
+        server_task.result()  # re-raises if the server task ended with an exception
 
 
 def _restore_signal_handlers(handlers: dict[int, tuple[str, object]], loop: asyncio.AbstractEventLoop) -> None:
@@ -60,6 +75,8 @@ async def run(args: argparse.Namespace) -> int:
     station = None
     server = None
     server_task = None
+    web_started = False
+    return_code = 0
     try:
         station = GroundStation(cfg)
         await station.start()
@@ -68,19 +85,27 @@ async def run(args: argparse.Namespace) -> int:
             app = create_app(station)
             host, port = args.host or cfg.web.host, args.port or cfg.web.port
             server = serve(app, host, port)
-            server_task = asyncio.create_task(server.serve(), name="uvicorn")
-            await _wait_started(server)
-            log.info("web: listening on http://%s:%d", host, port)
-        log.info("ground station running; Ctrl+C to stop")
-        await stop.wait()
+            server_task = asyncio.create_task(_serve_web(server), name="uvicorn")
+            try:
+                await _wait_started(server, server_task)
+            except Exception as exc:  # noqa: BLE001 - bind failure or startup timeout
+                log.error("web: failed to start: %s", exc)
+                return_code = 1
+            else:
+                web_started = True
+                log.info("web: listening on http://%s:%d", host, port)
+        if return_code == 0:
+            log.info("ground station running; Ctrl+C to stop")
+            await stop.wait()
     finally:
         if server is not None and server_task is not None:
             server.should_exit = True
             try:
                 await asyncio.wait_for(server_task, 10.0)
-            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - SystemExit is converted to RuntimeError by _serve_web
                 server_task.cancel()
-            log.info("web: stopped")
+            if web_started:
+                log.info("web: stopped")
         log.info("ground station stopping")
         if station is not None:
             await station.stop()
@@ -90,7 +115,7 @@ async def run(args: argparse.Namespace) -> int:
             sim_server.close()
             await sim_server.wait_closed()
         _restore_signal_handlers(handlers, loop)
-    return 0
+    return return_code
 
 
 def main() -> int:

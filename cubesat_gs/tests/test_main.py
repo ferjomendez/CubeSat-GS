@@ -194,3 +194,37 @@ async def test_sim_mode_serves_web(tmp_path, monkeypatch):
     assert rc == 0
     text = log_file.read_text(encoding="utf-8", errors="ignore")
     assert "web: stopped" in text and "ground station stopping" in text
+    assert text.index("web: stopped") < text.index("ground station stopping")
+
+
+async def test_web_bind_failure_exits_cleanly(tmp_path, monkeypatch):
+    """A port already bound by someone else must fail run() cleanly instead of
+    freezing the event loop: uvicorn's startup() calls sys.exit(STARTUP_FAILURE)
+    inside the server task on an OSError bind failure, and that SystemExit must
+    not wedge the loop or skip the finally cleanup."""
+    import socket
+    monkeypatch.delenv("MONGO_URI", raising=False)
+    log_file = tmp_path / "gs.log"
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    port = blocker.getsockname()[1]
+    try:
+        cfg = {
+            "serial": {"port": "auto", "reconnect_interval": 0.2},
+            "commands": {"registry": str(PKG / "config" / "commands.yaml")},
+            "telemetry": {"definitions": str(PKG / "config" / "telemetry_defs.yaml")},
+            "database": {"local_fallback_path": str(tmp_path / "gs.db")},
+            "logging": {"level": "INFO", "file": str(log_file)},
+            "web": {"host": "127.0.0.1", "port": port},
+        }
+        cfg_path = tmp_path / "gs_config.yaml"
+        cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+        args = argparse.Namespace(config=str(cfg_path), sim=True, sim_beacon_interval=1.0, sim_rssi=False,
+                                  log_level="INFO", no_web=False, host=None, port=None)
+        rc = await asyncio.wait_for(run(args), 20.0)
+    finally:
+        blocker.close()
+    assert rc != 0
+    text = log_file.read_text(encoding="utf-8", errors="ignore")
+    assert "ground station stopping" in text

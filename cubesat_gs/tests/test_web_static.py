@@ -20,6 +20,8 @@ async def test_spa_fallback_and_assets(web_stack, tmp_path):
         assert r.status_code == 200 and "javascript" in r.headers["content-type"]
         assert (await c.get("/assets/missing.js")).status_code == 404
         assert (await c.get("/api/nope")).status_code == 404
+        r = await c.get("/api")
+        assert r.status_code == 404 and r.json()["error"] == "not_found"
 
 
 async def test_missing_bundle_is_503(web_stack):
