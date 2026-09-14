@@ -105,8 +105,17 @@ async def test_busy_wrong_mode_disconnected(web_stack):
     assert r.status_code == 400 and r.json()["error"] == "wrong_mode"
     await station.freq.set_mode(Mode.TCTM)
     await station.serial.stop()
+    # Get history before the disconnected request
+    h_before = await client.get("/api/commands/history", params={"limit": 50})
+    history_before = h_before.json()["items"]
+    # Request while disconnected should return 503 but NOT create a phantom record
     r = await client.post("/api/commands/PING", json={})
     assert r.status_code == 503
+    # Check that no new record was added to history (phantom "failed" record prevention)
+    h_after = await client.get("/api/commands/history", params={"limit": 50})
+    history_after = h_after.json()["items"]
+    assert len(history_after) == len(history_before), \
+        f"Phantom record created: before={len(history_before)} items, after={len(history_after)} items"
     await station.serial.start()
     await wait_until(lambda: station.serial.connected)
 

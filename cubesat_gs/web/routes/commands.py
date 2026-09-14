@@ -45,7 +45,7 @@ async def command_history(station: GroundStation = Depends(get_station),
         # If mem is empty, query storage before the given "before" parameter.
         # This ensures we don't get duplicates of records already in memory.
         oldest_mem = datetime.fromisoformat(mem[-1]["ts"]) if mem else before
-        rows = await station.storage.query("commands", end=oldest_mem, limit=limit - len(items) + 50)
+        rows = await station.storage.query("commands", end=oldest_mem, limit=limit - len(items) + _STORAGE_OVERFETCH)
         seen = {(m["ts"], m["name"]) for m in items}
         for r in rows:
             # Exclude records at or after the cursor boundary to prevent duplicates on page boundaries
@@ -69,13 +69,20 @@ def _guard_serial(station: GroundStation) -> None:
         raise ApiError(503, "serial_disconnected", "modem is not connected")
 
 
+# Over-fetch buffer for storage queries: in-memory records also exist in storage,
+# so the storage page is over-fetched to ensure after seen-dedup and < before filtering the page can be filled.
+_STORAGE_OVERFETCH = 50
+
+
 @router.post("/commands/raw", response_model=CommandRecordOut)
 async def send_raw(body: SendRawIn, station: GroundStation = Depends(get_station)):
+    # Guard serial BEFORE manager call for non-refused paths to prevent phantom records
+    if body.confirm:
+        _guard_serial(station)
     rec = await station.telecommand.send_raw(body.hex, confirm=body.confirm)
     if rec.status == "refused":
         detail = json.dumps(CommandRecordOut.model_validate(rec.as_dict()).model_dump(mode="json"))
         raise ApiError(403, "confirm_required", detail)
-    _guard_serial(station)
     return _rec_out(rec)
 
 
@@ -84,10 +91,13 @@ async def send_command(name: str, body: SendCommandIn, station: GroundStation = 
     cdef = station.telecommand.commands.get(name)
     if cdef is None:
         raise ApiError(404, "unknown_command", name)
+    # Guard serial BEFORE manager call only if the command won't be refused
+    # (critical commands without confirm will be refused by the manager)
+    if body.confirm or not cdef.critical:
+        _guard_serial(station)
     payload = bytes.fromhex(body.payload_hex.replace(" ", "")) if body.payload_hex else None
     rec = await station.telecommand.send_command(name, confirm=body.confirm, payload_override=payload)
     if rec.status == "refused":
         detail = json.dumps(CommandRecordOut.model_validate(rec.as_dict()).model_dump(mode="json"))
         raise ApiError(403, "confirm_required", detail)
-    _guard_serial(station)
     return _rec_out(rec)
