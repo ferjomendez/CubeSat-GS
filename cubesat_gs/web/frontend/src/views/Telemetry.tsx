@@ -72,7 +72,7 @@ export function Telemetry() {
   }, [windowKey, customStart, customEnd]);
 
   const live = selection ? series[`${selection.apid}:${selection.field}`] ?? [] : [];
-  const { start, end } = windowRange(window);
+  const { start, end } = useMemo(() => windowRange(window), [window]);
 
   const { data: history } = useQuery({
     queryKey: ["telemetry-history", selection?.apid, selection?.field, start, end],
@@ -177,7 +177,8 @@ export function Telemetry() {
                   apid={selection.apid}
                   field={selection.field}
                   unit={unit}
-                  window={window}
+                  start={start}
+                  end={end}
                   live={live}
                   alarmLow={fieldDef?.alarm_low}
                   alarmHigh={fieldDef?.alarm_high}

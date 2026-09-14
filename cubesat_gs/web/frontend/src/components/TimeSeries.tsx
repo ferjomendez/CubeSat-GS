@@ -13,10 +13,13 @@ export type SeriesWindow = "1h" | "6h" | "24h" | { start: string; end: string };
 
 const WINDOW_MS: Record<"1h" | "6h" | "24h", number> = { "1h": 3_600_000, "6h": 6 * 3_600_000, "24h": 24 * 3_600_000 };
 
-/** Resolves a `SeriesWindow` to concrete ISO bounds — shared with callers that need the same `queryKey` for cache reuse. */
+/**
+ * Resolves a `SeriesWindow` to concrete ISO bounds — shared with callers that need the same `queryKey` for cache reuse.
+ * `end` is floored to the minute so the result stays stable across re-renders for the lifetime of an open window.
+ */
 export function windowRange(window: SeriesWindow): { start: string; end: string } {
   if (typeof window === "object") return window;
-  const end = Date.now();
+  const end = Math.floor(Date.now() / 60_000) * 60_000;
   return { start: new Date(end - WINDOW_MS[window]).toISOString(), end: new Date(end).toISOString() };
 }
 
@@ -47,7 +50,8 @@ export function TimeSeries({
   apid,
   field,
   unit,
-  window,
+  start,
+  end,
   live,
   alarmLow,
   alarmHigh,
@@ -55,13 +59,12 @@ export function TimeSeries({
   apid: number;
   field: string;
   unit?: string | null;
-  window: SeriesWindow;
+  start: string;
+  end: string;
   live: [number, number][];
   alarmLow?: number | null;
   alarmHigh?: number | null;
 }) {
-  const { start, end } = windowRange(window);
-
   const { data } = useQuery({
     queryKey: ["telemetry-history", apid, field, start, end],
     queryFn: () => api.get<TelemetryHistoryOut>("/api/telemetry/history", { apid, field, start, end, max_points: MAX_POINTS }),
