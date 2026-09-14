@@ -1,0 +1,28 @@
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/barlow-condensed/500.css";
+@import "@fontsource/barlow-condensed/600.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 214 22% 7%;
+  --bg-raised: 214 22% 10%;
+  --line: 214 18% 18%;
+  --text: 214 18% 87%;
+  --text-dim: 214 12% 59%;
+  --nominal: 145 55% 52%;
+  --warn: 41 76% 51%;
+  --alarm: 358 75% 59%;
+  --info: 210 77% 60%;
+  color-scheme: dark;
+}
+html, body, #root { height: 100%; }
+body { @apply bg-bg text-fg font-mono text-[13px] antialiased; font-variant-numeric: tabular-nums; }
+.label { @apply font-label text-[13px] font-medium tracking-[0.04em] text-dim; }
+.panel { @apply border border-line bg-bg rounded; }
+.panel-title { @apply label border-b border-line px-3 h-8 flex items-center justify-between; }
+.row { @apply h-7 border-b border-line/60; }
+:focus-visible { outline: 2px solid hsl(var(--info)); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
