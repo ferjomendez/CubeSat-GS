@@ -51,6 +51,9 @@ class FrequencyManager:
             raise ValueError("CUSTOM mode requires an explicit mhz")
         return float(mhz)
 
+    def set_presets(self, tctm: float, beacon: float) -> None:
+        self._cfg.tctm, self._cfg.beacon = float(tctm), float(beacon)
+
     async def set_mode(self, mode: Mode, mhz: float | None = None) -> None:
         target = self._target_mhz(mode, mhz)
         async with self._lock:

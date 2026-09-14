@@ -111,6 +111,7 @@ class GSConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     base_dir: Path = field(default_factory=lambda: DEFAULT_CONFIG_PATH.parent)
+    config_path: Path = field(default_factory=lambda: DEFAULT_CONFIG_PATH)
 
     def resolve(self, path_str: str) -> Path:
         """Resolve a config-relative path against the package dir (parent of config/)."""
@@ -169,6 +170,7 @@ def load_config(path: str | Path | None = None, *, dotenv: bool = True) -> GSCon
         data = yaml.safe_load(fh) or {}
     cfg: GSConfig = _build(GSConfig, data, "config")
     cfg.base_dir = path.resolve().parent
+    cfg.config_path = path.resolve()
     cfg.database.mongo_uri = os.environ.get("MONGO_URI") or None
     cfg.serial.reconnect_interval = float(cfg.serial.reconnect_interval)
     _validate(cfg)

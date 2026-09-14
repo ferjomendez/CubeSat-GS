@@ -264,6 +264,11 @@ class ExportIn(BaseModel):
     apid: int | None = None
 
 
+class DbStatsOut(BaseModel):
+    counts: dict[str, int]
+    health: dict[str, Any]
+
+
 class AlarmOut(BaseModel):
     ts: datetime
     apid: int
