@@ -74,6 +74,16 @@ async def test_iterate_sets_batch_size(mb):
     assert db["raw_packets"].last_cursor.batch_size_used == 7
 
 
+def test_default_factory_uses_tz_aware_client():
+    """The real motor client must be tz_aware, or reads come back as naive datetimes that
+    downstream code (and comparisons against aware `datetime` query params) mishandles."""
+    client = MongoBackend._default_factory("mongodb://localhost:1")
+    try:
+        assert client.codec_options.tz_aware is True
+    finally:
+        client.close()
+
+
 async def test_duplicate_explicit_null_sync_key_rejected(mb):
     """R2c: a real sparse unique index still indexes an explicit null -- only a MISSING
     field is exempt. Two docs with sync_key: None must collide, not silently coexist."""

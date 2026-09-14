@@ -28,6 +28,12 @@ def _rec_out(rec) -> dict:
     return d
 
 
+def _row_ts(row: dict) -> datetime:
+    """Storage rows carry "timestamp" as an ISO string (SQLite) or a native datetime (Mongo)."""
+    ts = row["timestamp"]
+    return ts if isinstance(ts, datetime) else datetime.fromisoformat(ts)
+
+
 @router.get("/commands", response_model=list[CommandDefOut])
 async def list_commands(station: GroundStation = Depends(get_station)):
     return [_def_out(c) for c in station.telecommand.commands.values()]
@@ -48,13 +54,14 @@ async def command_history(station: GroundStation = Depends(get_station),
         rows = await station.storage.query("commands", end=oldest_mem, limit=limit - len(items) + _STORAGE_OVERFETCH)
         seen = {(m["ts"], m["name"]) for m in items}
         for r in rows:
+            ts = _row_ts(r)
             # Exclude records at or after the cursor boundary to prevent duplicates on page boundaries
-            if before is not None and datetime.fromisoformat(r["timestamp"]) >= before:
+            if before is not None and ts >= before:
                 continue
-            key = (r["timestamp"], r["command_name"])
+            key = (ts.isoformat(), r["command_name"])
             if key in seen:
                 continue
-            items.append({"ts": r["timestamp"], "name": r["command_name"], "raw_hex": r["raw_hex_sent"],
+            items.append({"ts": ts.isoformat(), "name": r["command_name"], "raw_hex": r["raw_hex_sent"],
                           "status": r["status"], "response_hex": r.get("response_hex"),
                           "latency_ms": r.get("latency_ms"), "attempts": r.get("attempts", 0),
                           "error": None, "pending": False})

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 from cubesat_gs.core.frequency_manager import Mode
 from cubesat_gs.tests.conftest import wait_until
@@ -207,3 +208,45 @@ async def test_history_merge_pagination(web_stack):
     # Assert: paginated results are also in descending order
     paginated_timestamps = [rec["ts"] for rec in all_paginated]
     assert paginated_timestamps == sorted(paginated_timestamps, reverse=True), f"Paginated records not in descending order: {paginated_timestamps}"
+
+
+async def test_command_history_before_with_mongo_storage(mongo_web_stack):
+    """Regression test for the Mongo tz_aware fix: rows written to Mongo storage come back
+    as aware UTC datetimes (round-tripped through real BSON), and /commands/history?before=
+    keeps working when a row's "timestamp" is a native datetime rather than an ISO string."""
+    station, sim, client, mongo_client = mongo_web_stack
+
+    base_time = (datetime.now(timezone.utc) - timedelta(minutes=5)).replace(microsecond=123456)
+    for i in range(3):
+        await station.storage.write("commands", {
+            "timestamp": base_time - timedelta(minutes=i),
+            "command_name": f"OLD_{i}",
+            "raw_hex_sent": f"DEAD{i:04X}",
+            "response_received": True,
+            "response_hex": f"BEEF{i:04X}",
+            "latency_ms": 100.0 + i,
+            "status": "responded",
+            "attempts": 1,
+        })
+
+    # The fake client's storage really round-tripped through BSON: aware, ms-truncated.
+    stored = mongo_client["cubesat_gs"]["commands"].docs
+    assert len(stored) == 3
+    assert all(d["timestamp"].tzinfo is not None for d in stored)
+    assert stored[0]["timestamp"].microsecond == 123000
+
+    h = await client.get("/api/commands/history", params={"limit": 50})
+    assert h.status_code == 200
+    items = h.json()["items"]
+    assert [i["name"] for i in items] == ["OLD_0", "OLD_1", "OLD_2"]
+    for item in items:
+        assert item["ts"].endswith("+00:00") or item["ts"].endswith("Z"), item["ts"]
+
+    # Paginate with a "before" cursor built from a Mongo-native datetime row: this must not
+    # raise TypeError (datetime.fromisoformat on a datetime) and must exclude the cursor itself.
+    cursor = items[0]["ts"]
+    h2 = await client.get("/api/commands/history", params={"limit": 50, "before": cursor})
+    assert h2.status_code == 200
+    items2 = h2.json()["items"]
+    assert [i["name"] for i in items2] == ["OLD_1", "OLD_2"]
+    assert all(i["ts"] < cursor for i in items2)

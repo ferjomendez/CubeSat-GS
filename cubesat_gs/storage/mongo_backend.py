@@ -52,7 +52,7 @@ class MongoBackend:
     @staticmethod
     def _default_factory(uri: str) -> Any:
         from motor.motor_asyncio import AsyncIOMotorClient
-        return AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
+        return AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000, tz_aware=True)
 
     # ---- lifecycle
     async def connect(self) -> None:
