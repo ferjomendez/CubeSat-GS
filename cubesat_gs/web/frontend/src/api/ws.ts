@@ -5,9 +5,11 @@ export function connectWs(onMessage: (m: WsMessage) => void, onStatus: (connecte
   let closed = false;
   let delay = 1000;
   let ping: number | undefined;
+  let reconnectTimer: number | undefined;
   const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 
   const open = () => {
+    if (closed) return;
     ws = new WebSocket(url);
     ws.onopen = () => {
       delay = 1000;
@@ -25,7 +27,7 @@ export function connectWs(onMessage: (m: WsMessage) => void, onStatus: (connecte
       window.clearInterval(ping);
       onStatus(false);
       if (!closed) {
-        setTimeout(open, delay);
+        reconnectTimer = window.setTimeout(open, delay);
         delay = Math.min(delay * 2, 10000);
       }
     };
@@ -37,6 +39,7 @@ export function connectWs(onMessage: (m: WsMessage) => void, onStatus: (connecte
     close() {
       closed = true;
       window.clearInterval(ping);
+      window.clearTimeout(reconnectTimer);
       ws?.close();
     },
   };
