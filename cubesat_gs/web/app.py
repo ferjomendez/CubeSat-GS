@@ -56,6 +56,14 @@ def create_app(station: GroundStation, *, static_dir: Path | None = None) -> Fas
             return
         await hub.handle(websocket)
 
+    @app.get("/api/schema.json", include_in_schema=False)
+    async def schema_json():
+        from cubesat_gs.web import schemas
+        import inspect
+        from pydantic import BaseModel
+        return {name: cls.model_json_schema() for name, cls in inspect.getmembers(schemas, inspect.isclass)
+                if issubclass(cls, BaseModel) and cls is not BaseModel}
+
     static_dir = app.state.static_dir
     if (static_dir / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")

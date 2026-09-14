@@ -3,7 +3,7 @@
 Ground station software for the UAI CubeSat: ESP32 + SX1278 LoRa modem on USB serial,
 Raspberry Pi host, CCSDS Space Packets, MongoDB Atlas storage with SQLite offline fallback.
 
-Phase 1 (this state): headless core. Phase 2: FastAPI + React dashboard. Phase 3: pass prediction.
+Phase 1 + 2 (this state): headless core, FastAPI/WebSocket backend, React dashboard, pass prediction.
 
 ## Layout
 
@@ -23,11 +23,27 @@ Without `MONGO_URI` the station stores everything in `cubesat_gs/data/gs_offline
 ## Run
 
 ```bash
-python cubesat_gs/main.py                 # real modem, port from config (auto-detect by default)
+python cubesat_gs/main.py                 # real modem + dashboard on http://0.0.0.0:8080
 python cubesat_gs/main.py --sim           # no hardware: in-process ESP32/OBC simulator
-python -m cubesat_gs.tests.serial_simulator --port 5000   # standalone simulator (serial.port: "socket://127.0.0.1:5000")
-python -m cubesat_gs.storage.exporter raw_packets out.csv --start 2026-09-01T00:00:00+00:00
+python cubesat_gs/main.py --no-web        # headless
 ```
+
+Open `http://<pi-address>:8080/` for the dashboard and `/api/docs` for the API.
+
+## Dashboard development
+
+```bash
+cd cubesat_gs/web/frontend
+npm install
+npm run dev          # http://localhost:5173, proxies /api and /ws to :8080 (run main.py --sim alongside)
+npm test && npm run typecheck
+npm run build        # writes cubesat_gs/web/static/ — commit the result; the Pi needs no Node
+```
+
+## Pass prediction
+
+Set `satellite.tle_line1/2` (or `satellite.tle_source` to a CelesTrak URL and press "Refresh TLE" in Settings).
+Passes above `passes.min_elevation` are listed for `passes.prediction_days`; the current pass streams az/el/Doppler to the dashboard once per second.
 
 ## Test
 
