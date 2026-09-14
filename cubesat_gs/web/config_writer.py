@@ -5,8 +5,9 @@ import dataclasses
 import logging
 import os
 import tempfile
+import typing
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args, get_origin
 
 from ruamel.yaml import YAML
 
@@ -55,6 +56,52 @@ def _yaml() -> YAML:
     return y
 
 
+def _validate_types(sections: dict[str, dict[str, Any]]) -> None:
+    """Validate that values match the expected types of their config fields."""
+    nested_types = {
+        "serial": cfgmod.SerialConfig,
+        "frequencies": cfgmod.FrequencyConfig,
+        "station": cfgmod.StationConfig,
+        "satellite": cfgmod.SatelliteConfig,
+        "passes": cfgmod.PassConfig,
+        "commands": cfgmod.CommandConfig,
+    }
+    for sec, values in sections.items():
+        if sec not in nested_types:
+            continue
+        cls = nested_types[sec]
+        hints = typing.get_type_hints(cls)
+        for key, val in values.items():
+            if key not in hints:
+                continue
+            hint = hints[key]
+            # Extract the actual type from Optional/Union types
+            origin = get_origin(hint)
+            args = get_args(hint)
+            # Handle Optional[X] which is Union[X, None]
+            if origin is typing.Union and type(None) in args:
+                # Optional type: accept None and the non-None type
+                inner_types = tuple(t for t in args if t is not type(None))
+                if val is None:
+                    continue
+                hint = inner_types[0] if len(inner_types) == 1 else typing.Union[inner_types]
+                origin = get_origin(hint)
+                args = get_args(hint)
+            # Type checking logic
+            if hint is int or origin is int:
+                if not isinstance(val, int) or isinstance(val, bool):
+                    raise ValueError(f"{sec}.{key} must be int, got {type(val).__name__}")
+            elif hint is float or origin is float:
+                if not isinstance(val, (int, float)) or isinstance(val, bool):
+                    raise ValueError(f"{sec}.{key} must be float or int, got {type(val).__name__}")
+            elif hint is str or origin is str:
+                if not isinstance(val, str):
+                    raise ValueError(f"{sec}.{key} must be str, got {type(val).__name__}")
+            elif hint is bool or origin is bool:
+                if not isinstance(val, bool):
+                    raise ValueError(f"{sec}.{key} must be bool, got {type(val).__name__}")
+
+
 def check_sections(sections: dict[str, dict[str, Any]]) -> None:
     for sec, values in sections.items():
         if sec not in WRITABLE:
@@ -69,6 +116,7 @@ def check_sections(sections: dict[str, dict[str, Any]]) -> None:
 def validate_merge(path: Path, sections: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Return the merged plain dict after building a GSConfig from it (raises ValueError if invalid)."""
     check_sections(sections)
+    _validate_types(sections)
     y = _yaml()
     with open(path, "r", encoding="utf-8") as fh:
         doc = y.load(fh) or {}
@@ -123,6 +171,9 @@ async def apply_live(station, sections: dict[str, dict[str, Any]]) -> list[str]:
     cfg = station.cfg
     for sec, values in sections.items():
         for key, val in values.items():
+            # Skip TLE lines until they are validated
+            if sec == "satellite" and key in ("tle_line1", "tle_line2"):
+                continue
             if APPLIES.get(f"{sec}.{key}") != "live":
                 setattr(getattr(cfg, sec), key, val)
                 continue
@@ -138,7 +189,14 @@ async def apply_live(station, sections: dict[str, dict[str, Any]]) -> list[str]:
     if "satellite" in sections:
         station.passes.set_tle_source(cfg.satellite.tle_source)
         if "tle_line1" in sections["satellite"] or "tle_line2" in sections["satellite"]:
-            await station.passes.set_tle(cfg.satellite.tle_line1, cfg.satellite.tle_line2)  # raises TLEError
+            # Validate TLE first, then set in config only if validation succeeds
+            await station.passes.set_tle(sections["satellite"]["tle_line1"], sections["satellite"]["tle_line2"])
+            cfg.satellite.tle_line1 = sections["satellite"]["tle_line1"]
+            cfg.satellite.tle_line2 = sections["satellite"]["tle_line2"]
+            if "tle_line1" in sections["satellite"]:
+                applied.append("satellite.tle_line1")
+            if "tle_line2" in sections["satellite"]:
+                applied.append("satellite.tle_line2")
     if "serial" in sections and "port" in sections["serial"]:
         await station.serial.stop()
         await station.serial.start()

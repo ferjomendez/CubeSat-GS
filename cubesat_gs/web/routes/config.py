@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from cubesat_gs.core.station import GroundStation
 from cubesat_gs.web import config_writer as cw
 from cubesat_gs.web.deps import ApiError, get_station
-from cubesat_gs.web.schemas import ConfigIn, ConfigOut, ConfigPutOut
+from cubesat_gs.web.schemas import ConfigIn, ConfigOut, ConfigPutOut, DbStatsOut, SerialPortOut
 
 router = APIRouter()
 
@@ -28,13 +28,13 @@ async def put_config(body: ConfigIn, station: GroundStation = Depends(get_statio
     return {"config": cw.public_config(station.cfg), "applied_live": applied, "restart_required": restart}
 
 
-@router.get("/config/serial-ports")
+@router.get("/config/serial-ports", response_model=list[SerialPortOut])
 async def serial_ports():
     from serial.tools import list_ports
     return [{"device": p.device, "description": p.description or "", "vid": p.vid, "pid": p.pid}
             for p in list_ports.comports()]
 
 
-@router.get("/db/stats")
+@router.get("/db/stats", response_model=DbStatsOut)
 async def db_stats(station: GroundStation = Depends(get_station)):
     return {"counts": await station.storage.stats(), "health": await station.storage.health()}

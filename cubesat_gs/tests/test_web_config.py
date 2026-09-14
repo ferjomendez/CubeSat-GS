@@ -82,3 +82,39 @@ async def test_serial_ports_and_db_stats(cfg_stack):
     assert r.status_code == 200 and isinstance(r.json(), list)
     r = await client.get("/api/db/stats")
     assert set(r.json()["counts"]) >= {"raw_packets", "passes"} and r.json()["health"]["mongo"] == "disabled"
+
+
+async def test_put_tle_rejects_junk_without_corrupting_config(cfg_stack):
+    from cubesat_gs.tests.test_pass_predictor import L1, L2
+    station, sim, client, cfg_path = cfg_stack
+    # Set valid TLE first
+    r = await client.put("/api/config", json={"sections": {"satellite": {"tle_line1": L1, "tle_line2": L2}}})
+    assert r.status_code == 200
+    assert station.cfg.satellite.tle_line1 == L1 and station.cfg.satellite.tle_line2 == L2
+    # Try to set junk TLE - should reject and restore valid TLE in config
+    r = await client.put("/api/config", json={"sections": {"satellite": {"tle_line1": "junk", "tle_line2": "junk"}}})
+    assert r.status_code == 422 and r.json()["error"] == "invalid_tle"
+    # Config must still have valid TLE (not junk)
+    assert station.cfg.satellite.tle_line1 == L1 and station.cfg.satellite.tle_line2 == L2
+    # GET config must also return the valid TLE
+    r = await client.get("/api/config")
+    assert r.json()["config"]["satellite"]["tle_line1"] == L1 and r.json()["config"]["satellite"]["tle_line2"] == L2
+
+
+async def test_put_config_rejects_invalid_types(cfg_stack):
+    station, sim, client, cfg_path = cfg_stack
+    before = cfg_path.read_text(encoding="utf-8")
+    # Invalid type for int field
+    r = await client.put("/api/config", json={"sections": {"serial": {"baudrate": "fast"}}})
+    assert r.status_code == 422 and "invalid" in r.json()["error"]
+    # Invalid type for float field
+    r = await client.put("/api/config", json={"sections": {"commands": {"default_timeout": "abc"}}})
+    assert r.status_code == 422
+    # Invalid type for float field
+    r = await client.put("/api/config", json={"sections": {"commands": {"retry_backoff": "slow"}}})
+    assert r.status_code == 422
+    # File should not be written on validation failure
+    assert cfg_path.read_text(encoding="utf-8") == before
+    # int value for float field should succeed (backward compat)
+    r = await client.put("/api/config", json={"sections": {"passes": {"min_elevation": 15}}})
+    assert r.status_code == 200

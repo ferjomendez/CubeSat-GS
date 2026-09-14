@@ -15,7 +15,7 @@ router = APIRouter()
 _MEDIA = {"csv": "text/csv", "json": "application/json"}
 
 
-@router.post("/export")
+@router.post("/export", response_class=FileResponse)
 async def export_collection(body: ExportIn, background: BackgroundTasks,
                             station: GroundStation = Depends(get_station)):
     if body.collection not in COLLECTIONS:
