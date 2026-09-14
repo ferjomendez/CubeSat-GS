@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from cubesat_gs.core.frequency_manager import Mode
 from cubesat_gs.tests.conftest import wait_until
@@ -30,16 +31,63 @@ async def test_critical_and_raw_require_confirm(web_stack, tmp_path):
     station, sim, client = web_stack
     from cubesat_gs.core.telecommand import CommandDef
     station.telecommand.commands["REBOOT"] = CommandDef("REBOOT", "reboot", 100, b"\x01\xff", None, 1.0, True)
+
+    # Test critical command without confirm returns 403 with refused record in detail
     r = await client.post("/api/commands/REBOOT", json={"confirm": False})
     assert r.status_code == 403 and r.json()["error"] == "confirm_required"
+    detail_rec = json.loads(r.json()["detail"])
+    assert detail_rec["status"] == "refused"
+    assert detail_rec["name"] == "REBOOT"
+    # Check that refused record appears in history (CommandCompleted event writes to storage)
+    await asyncio.sleep(0.05)
+    h = await client.get("/api/commands/history", params={"limit": 50})
+    assert any(rec["name"] == "REBOOT" and rec["status"] == "refused" for rec in h.json()["items"]), \
+        f"REBOOT refused record not found in history: {h.json()['items']}"
+
+    # Test critical command with confirm succeeds
     r = await client.post("/api/commands/REBOOT", json={"confirm": True})
     assert r.status_code == 200 and r.json()["status"] == "acked"
+
+    # Test raw command without confirm returns 403 with refused record in detail
     r = await client.post("/api/commands/raw", json={"hex": "DEADBEEF"})
     assert r.status_code == 403
+    detail_rec = json.loads(r.json()["detail"])
+    assert detail_rec["status"] == "refused"
+    assert detail_rec["name"] == "RAW"
+    # Check that refused record appears in history
+    await asyncio.sleep(0.05)
+    h = await client.get("/api/commands/history", params={"limit": 50})
+    assert any(rec["name"] == "RAW" and rec["status"] == "refused" for rec in h.json()["items"]), \
+        f"RAW refused record not found in history: {h.json()['items']}"
+
+    # Test raw command with bad hex
     r = await client.post("/api/commands/raw", json={"hex": "XYZ", "confirm": True})
     assert r.status_code == 422
+
+    # Test raw command with valid hex and confirm
     r = await client.post("/api/commands/raw", json={"hex": "DE AD BE EF", "confirm": True})
     assert r.status_code == 200 and r.json()["name"] == "RAW" and sim.received_tx[-1] == b"\xde\xad\xbe\xef"
+
+
+async def test_critical_without_confirm_precedes_serial_disconnect(web_stack):
+    """Verify critical-without-confirm→403 takes precedence over serial-disconnected→503."""
+    station, sim, client = web_stack
+    from cubesat_gs.core.telecommand import CommandDef
+    station.telecommand.commands["REBOOT"] = CommandDef("REBOOT", "reboot", 100, b"\x01\xff", None, 1.0, True)
+
+    # Disconnect serial
+    await station.serial.stop()
+    await wait_until(lambda: not station.serial.connected)
+
+    # Critical command without confirm should still return 403, not 503
+    r = await client.post("/api/commands/REBOOT", json={"confirm": False})
+    assert r.status_code == 403 and r.json()["error"] == "confirm_required"
+    detail_rec = json.loads(r.json()["detail"])
+    assert detail_rec["status"] == "refused"
+
+    # Reconnect for cleanup
+    await station.serial.start()
+    await wait_until(lambda: station.serial.connected)
 
 
 async def test_busy_wrong_mode_disconnected(web_stack):
@@ -131,21 +179,22 @@ async def test_history_merge_pagination(web_stack):
     # Assert: exactly 4 records total (3 old + 1 new PING) in full history
     assert len(all_records) == 4, f"Expected 4 records in full history, got {len(all_records)}"
 
-    # Assert: newest-first ordering
+    # Assert: strictly descending order by timestamp (newest-first)
+    timestamps = [rec["ts"] for rec in all_records]
+    assert timestamps == sorted(timestamps, reverse=True), f"Records not in descending order: {timestamps}"
+
+    # Assert: expected names present
     names = [rec["name"] for rec in all_records]
     old_names = [rec["name"] for rec in all_records if rec["name"].startswith("OLD_")]
     assert "PING" in names, f"PING not in records: {names}"
     assert len(old_names) == 3, f"Expected 3 OLD_ records, got {len(old_names)}"
 
-    # Assert: when collecting from all pages, we get all unique records
-    # (pagination may have duplicates at page boundaries, so we deduplicate)
-    unique_records = {}
-    for rec in all_paginated:
-        key = (rec["ts"], rec["name"])
-        unique_records[key] = rec
-    assert len(unique_records) == 4, f"Expected 4 unique records from pagination, got {len(unique_records)}"
+    # Assert: no duplicates in paginated results
+    assert len(all_paginated) == 4, f"Expected 4 paginated records without duplicates, got {len(all_paginated)}"
+    paginated_keys = [(rec["ts"], rec["name"]) for rec in all_paginated]
+    unique_keys = set(paginated_keys)
+    assert len(unique_keys) == 4, f"Duplicates found in pagination: {len(paginated_keys)} items but only {len(unique_keys)} unique"
 
-    # Verify that all records from full history are in the deduplicated pagination results
-    for rec in all_records:
-        key = (rec["ts"], rec["name"])
-        assert key in unique_records, f"Record {key} from full history not in pagination"
+    # Assert: paginated results are also in descending order
+    paginated_timestamps = [rec["ts"] for rec in all_paginated]
+    assert paginated_timestamps == sorted(paginated_timestamps, reverse=True), f"Paginated records not in descending order: {paginated_timestamps}"

@@ -45,9 +45,12 @@ async def command_history(station: GroundStation = Depends(get_station),
         # If mem is empty, query storage before the given "before" parameter.
         # This ensures we don't get duplicates of records already in memory.
         oldest_mem = datetime.fromisoformat(mem[-1]["ts"]) if mem else before
-        rows = await station.storage.query("commands", end=oldest_mem, limit=limit - len(items) + 100)
+        rows = await station.storage.query("commands", end=oldest_mem, limit=limit - len(items) + 50)
         seen = {(m["ts"], m["name"]) for m in items}
         for r in rows:
+            # Exclude records at or after the cursor boundary to prevent duplicates on page boundaries
+            if before is not None and datetime.fromisoformat(r["timestamp"]) >= before:
+                continue
             key = (r["timestamp"], r["command_name"])
             if key in seen:
                 continue
@@ -68,11 +71,11 @@ def _guard_serial(station: GroundStation) -> None:
 
 @router.post("/commands/raw", response_model=CommandRecordOut)
 async def send_raw(body: SendRawIn, station: GroundStation = Depends(get_station)):
-    _guard_serial(station)
     rec = await station.telecommand.send_raw(body.hex, confirm=body.confirm)
     if rec.status == "refused":
         detail = json.dumps(CommandRecordOut.model_validate(rec.as_dict()).model_dump(mode="json"))
         raise ApiError(403, "confirm_required", detail)
+    _guard_serial(station)
     return _rec_out(rec)
 
 
@@ -81,10 +84,10 @@ async def send_command(name: str, body: SendCommandIn, station: GroundStation = 
     cdef = station.telecommand.commands.get(name)
     if cdef is None:
         raise ApiError(404, "unknown_command", name)
-    _guard_serial(station)
     payload = bytes.fromhex(body.payload_hex.replace(" ", "")) if body.payload_hex else None
     rec = await station.telecommand.send_command(name, confirm=body.confirm, payload_override=payload)
     if rec.status == "refused":
         detail = json.dumps(CommandRecordOut.model_validate(rec.as_dict()).model_dump(mode="json"))
         raise ApiError(403, "confirm_required", detail)
+    _guard_serial(station)
     return _rec_out(rec)
