@@ -17,6 +17,13 @@ from cubesat_gs.core.station import GroundStation, setup_logging  # noqa: E402
 log = logging.getLogger("main")
 
 
+async def _wait_started(server, timeout: float = 10.0) -> None:
+    async def _w():
+        while not server.started:
+            await asyncio.sleep(0.05)
+    await asyncio.wait_for(_w(), timeout)
+
+
 def _restore_signal_handlers(handlers: dict[int, tuple[str, object]], loop: asyncio.AbstractEventLoop) -> None:
     """Restore signal handlers to their original state."""
     for sig, (method, old_handler) in handlers.items():
@@ -51,12 +58,29 @@ async def run(args: argparse.Namespace) -> int:
             handlers[sig] = ("signal.signal", old_handler)
 
     station = None
+    server = None
+    server_task = None
     try:
         station = GroundStation(cfg)
         await station.start()
+        if not args.no_web:
+            from cubesat_gs.web.app import create_app, serve
+            app = create_app(station)
+            host, port = args.host or cfg.web.host, args.port or cfg.web.port
+            server = serve(app, host, port)
+            server_task = asyncio.create_task(server.serve(), name="uvicorn")
+            await _wait_started(server)
+            log.info("web: listening on http://%s:%d", host, port)
         log.info("ground station running; Ctrl+C to stop")
         await stop.wait()
     finally:
+        if server is not None and server_task is not None:
+            server.should_exit = True
+            try:
+                await asyncio.wait_for(server_task, 10.0)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                server_task.cancel()
+            log.info("web: stopped")
         log.info("ground station stopping")
         if station is not None:
             await station.stop()
@@ -76,6 +100,9 @@ def main() -> int:
     ap.add_argument("--sim-beacon-interval", type=float, default=10.0)
     ap.add_argument("--sim-rssi", action="store_true", help="simulator appends fake RSSI/SNR")
     ap.add_argument("--log-level", help="override logging.level from config")
+    ap.add_argument("--no-web", action="store_true", help="skip running the web server")
+    ap.add_argument("--host", type=str, help="override web.host from config")
+    ap.add_argument("--port", type=int, help="override web.port from config")
     args = ap.parse_args()
     try:
         return asyncio.run(run(args))

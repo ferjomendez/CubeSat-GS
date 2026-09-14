@@ -5,7 +5,10 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+import uvicorn
 
 from cubesat_gs.core.station import GroundStation
 from cubesat_gs.web.deps import install_error_handlers
@@ -52,4 +55,29 @@ def create_app(station: GroundStation, *, static_dir: Path | None = None) -> Fas
             return
         await hub.handle(websocket)
 
+    static_dir = app.state.static_dir
+    if (static_dir / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def spa(path: str, request: Request):
+        if path.startswith("api/") or path == "ws":
+            return JSONResponse({"error": "not_found", "detail": None}, status_code=404)
+        index = app.state.static_dir / "index.html"
+        candidate = app.state.static_dir / path if path else None
+        if candidate and candidate.is_file() and candidate.resolve().is_relative_to(app.state.static_dir.resolve()):
+            return FileResponse(candidate)
+        if not index.is_file():
+            return JSONResponse({"error": "dashboard_not_built",
+                                 "detail": "run `npm run build` in cubesat_gs/web/frontend"}, status_code=503)
+        return FileResponse(index)
+
     return app
+
+
+def serve(app: FastAPI, host: str, port: int) -> uvicorn.Server:
+    """A uvicorn server that runs in the caller's loop and never installs its own signal handlers."""
+    config = uvicorn.Config(app, host=host, port=port, loop="none", log_config=None, access_log=False)
+    server = uvicorn.Server(config)
+    server.install_signal_handlers = lambda: None  # main.py owns SIGINT/SIGTERM
+    return server

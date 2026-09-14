@@ -33,7 +33,7 @@ async def test_sim_mode_starts_and_stops_on_sigint(tmp_path, monkeypatch):
     cfg_path = tmp_path / "gs_config.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     args = argparse.Namespace(config=str(cfg_path), sim=True, sim_beacon_interval=1.0,
-                              sim_rssi=False, log_level="INFO")
+                              sim_rssi=False, log_level="INFO", no_web=True, host=None, port=None)
     task = asyncio.create_task(run(args))
     try:
         await _wait_for_line(log_file, "ground station running")
@@ -94,7 +94,7 @@ async def test_run_cleans_up_when_station_start_fails(tmp_path, monkeypatch):
     cfg_path = tmp_path / "gs_config.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     args = argparse.Namespace(config=str(cfg_path), sim=True, sim_beacon_interval=1.0,
-                              sim_rssi=False, log_level="INFO")
+                              sim_rssi=False, log_level="INFO", no_web=True, host=None, port=None)
 
     with pytest.raises(RuntimeError, match="boom"):
         await asyncio.wait_for(run(args), 5.0)
@@ -150,7 +150,7 @@ async def test_run_cleans_up_when_station_construction_fails(tmp_path, monkeypat
     cfg_path = tmp_path / "gs_config.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     args = argparse.Namespace(config=str(cfg_path), sim=True, sim_beacon_interval=1.0,
-                              sim_rssi=False, log_level="INFO")
+                              sim_rssi=False, log_level="INFO", no_web=True, host=None, port=None)
 
     with pytest.raises(RuntimeError, match="boom-construct"):
         await asyncio.wait_for(run(args), 5.0)
@@ -158,3 +158,39 @@ async def test_run_cleans_up_when_station_construction_fails(tmp_path, monkeypat
     # station was never constructed, so no station_stop -- but the sim/server must still
     # be torn down.
     assert calls == ["sim_stop", "server_close", "server_wait_closed"]
+
+
+async def test_sim_mode_serves_web(tmp_path, monkeypatch):
+    import httpx
+    import socket
+    monkeypatch.delenv("MONGO_URI", raising=False)
+    log_file = tmp_path / "gs.log"
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    cfg = {
+        "serial": {"port": "auto", "reconnect_interval": 0.2},
+        "commands": {"registry": str(PKG / "config" / "commands.yaml")},
+        "telemetry": {"definitions": str(PKG / "config" / "telemetry_defs.yaml")},
+        "database": {"local_fallback_path": str(tmp_path / "gs.db")},
+        "logging": {"level": "INFO", "file": str(log_file)},
+        "web": {"host": "127.0.0.1", "port": port},
+    }
+    cfg_path = tmp_path / "gs_config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    args = argparse.Namespace(config=str(cfg_path), sim=True, sim_beacon_interval=1.0, sim_rssi=False,
+                              log_level="INFO", no_web=False, host=None, port=None)
+    task = asyncio.create_task(run(args))
+    try:
+        await _wait_for_line(log_file, "web: listening on")
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"http://127.0.0.1:{port}/api/status", timeout=5.0)
+            assert r.status_code == 200 and r.json()["serial"]["connected"] in (True, False)
+        signal.raise_signal(signal.SIGINT)
+        rc = await asyncio.wait_for(task, 10.0)
+    finally:
+        if not task.done():
+            task.cancel()
+    assert rc == 0
+    text = log_file.read_text(encoding="utf-8", errors="ignore")
+    assert "web: stopped" in text and "ground station stopping" in text
