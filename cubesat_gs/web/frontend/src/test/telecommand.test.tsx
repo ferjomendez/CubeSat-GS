@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useGs } from "@/store/gs";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import Telecommand from "@/views/Telecommand";
 
 const defs = [
@@ -60,5 +61,36 @@ describe("Telecommand", () => {
     useGs.getState().applyMessage({ type: "command", ts: "t", data: { ts: new Date().toISOString(), name: "PING", raw_hex: "10", status: "acked", response_hex: null, latency_ms: null, attempts: 0, error: null, pending: true } });
     render(<QueryClientProvider client={new QueryClient()}><Telecommand /></QueryClientProvider>);
     expect(screen.getByText(/waiting for response/i)).toBeInTheDocument();
+  });
+
+  it("shows a tooltip on disabled Send buttons explaining the disconnect, on focus", async () => {
+    mockFetch({ "/api/commands": defs, "/api/commands/history": { items: [], next_before: null } });
+    useGs.setState({ connected: false });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <Telecommand />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    const send = (await screen.findAllByRole("button", { name: /^send$/i }))[0];
+    expect(send).toBeDisabled();
+    expect(screen.queryByText(/ground station connection lost/i)).not.toBeInTheDocument();
+    fireEvent.focus(send.parentElement as HTMLElement);
+    expect(await screen.findByText(/ground station connection lost/i)).toBeInTheDocument();
+  });
+
+  it("can load older history even when no live command has arrived yet", async () => {
+    mockFetch({
+      "/api/commands": defs,
+      "/api/commands/history": {
+        items: [{ ts: "2026-09-14T00:00:00Z", name: "PING", raw_hex: "10", status: "responded", response_hex: "AABBCCDD", latency_ms: 12.5, attempts: 1, error: null, pending: false }],
+        next_before: null,
+      },
+    });
+    render(<QueryClientProvider client={new QueryClient()}><Telecommand /></QueryClientProvider>);
+    await screen.findByText(/no commands sent yet/i);
+    fireEvent.click(screen.getByRole("button", { name: /load older/i }));
+    await waitFor(() => expect(screen.getByText("AABBCCDD")).toBeInTheDocument());
   });
 });

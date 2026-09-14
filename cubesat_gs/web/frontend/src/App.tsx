@@ -9,6 +9,7 @@ import { useGs } from "@/store/gs";
 import { cn } from "@/lib/utils";
 import { DisconnectedBanner } from "@/components/DisconnectedBanner";
 import { StatusStrip } from "@/components/StatusStrip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { Overview } from "@/views/Overview";
 import LiveFeed from "@/views/LiveFeed";
 import { Telemetry } from "@/views/Telemetry";
@@ -110,11 +111,13 @@ function WsBootstrap() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <WsBootstrap />
-        <ToastBridge />
-        <Layout />
-      </BrowserRouter>
+      <TooltipProvider>
+        <BrowserRouter>
+          <WsBootstrap />
+          <ToastBridge />
+          <Layout />
+        </BrowserRouter>
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }

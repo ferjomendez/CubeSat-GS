@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Panel } from "@/components/Panel";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fmtBytes } from "@/lib/format";
 import { age, local, utc } from "@/lib/time";
 import { useGs } from "@/store/gs";
@@ -39,6 +40,43 @@ function toastError(err: unknown, name: string) {
   } else {
     toast.error(`Failed to send ${name}`);
   }
+}
+
+/**
+ * A mutation button gated on `!connected`. Chromium suppresses the native `title` tooltip on
+ * disabled controls, so when disconnected the button is wrapped in a Radix tooltip instead —
+ * Radix needs a focusable, non-disabled trigger element, hence the `span` wrapper (the standard
+ * pattern for tooltips on disabled controls). Only wrapped while actually disconnected: when
+ * connected, `disabled` may still be true for other reasons (e.g. invalid input) that have
+ * nothing to do with the connection, so no connection tooltip is shown for those.
+ */
+function MutationButton({
+  connected,
+  disabled,
+  onClick,
+  className,
+  children,
+}: {
+  connected: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  className: string;
+  children: ReactNode;
+}) {
+  const button = (
+    <button type="button" disabled={!connected || disabled} onClick={onClick} className={className}>
+      {children}
+    </button>
+  );
+  if (connected) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0}>{button}</span>
+      </TooltipTrigger>
+      <TooltipContent>{DISCONNECTED_TITLE}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 /** Ticks every second while a command is pending, showing elapsed time since it was sent. */
@@ -106,7 +144,12 @@ export default function Telecommand() {
   }, [commandHistory, older]);
 
   const loadOlder = () => void infinite.fetchNextPage();
-  const canLoadOlder = !infinite.data || infinite.hasNextPage;
+  // `commandHistory` only fills from live WS events, so on a fresh session it's empty and this
+  // button is the only way to reach persisted history — it must stay usable even when
+  // rows.length === 0. Disable only while a page is in flight or once the backend has said
+  // there's nothing more (hasNextPage === false); before the first fetch, data is undefined and
+  // hasNextPage is unset, so the button starts out enabled.
+  const loadOlderDisabled = infinite.isFetching || (infinite.data != null && infinite.hasNextPage === false);
 
   const sendCommand = async (cmd: CommandDefOut, payloadHex: string | null) => {
     try {
@@ -153,15 +196,13 @@ export default function Telecommand() {
                 <td className="px-2 font-mono tabular-nums">{c.timeout}s</td>
                 <td className="px-2">{c.critical ? <AlarmBadge tone="alarm" text="critical" /> : null}</td>
                 <td className="px-2 py-1 text-right">
-                  <button
-                    type="button"
-                    disabled={!connected}
-                    title={!connected ? DISCONNECTED_TITLE : undefined}
+                  <MutationButton
+                    connected={connected}
                     onClick={() => setSelectedCmd(c)}
                     className="label rounded border border-line px-2 py-0.5 hover:border-info disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Send
-                  </button>
+                  </MutationButton>
                 </td>
               </tr>
             ))}
@@ -189,15 +230,14 @@ export default function Telecommand() {
           ) : null}
         </div>
         <div>
-          <button
-            type="button"
-            disabled={!connected || !rawClean || !!rawError}
-            title={!connected ? DISCONNECTED_TITLE : undefined}
+          <MutationButton
+            connected={connected}
+            disabled={!rawClean || !!rawError}
             onClick={() => setRawDialogOpen(true)}
             className="label rounded border border-line px-2 py-1 hover:border-info disabled:cursor-not-allowed disabled:opacity-40"
           >
             Send raw
-          </button>
+          </MutationButton>
         </div>
       </Panel>
 
@@ -240,18 +280,16 @@ export default function Telecommand() {
             )}
           </tbody>
         </table>
-        {rows.length > 0 && canLoadOlder && (
-          <div className="flex justify-center border-t border-line/60 p-2">
-            <button
-              type="button"
-              className="label rounded border border-line px-2 py-1 hover:border-info"
-              disabled={infinite.isFetching}
-              onClick={loadOlder}
-            >
-              {infinite.isFetching ? "Loading…" : "Load older"}
-            </button>
-          </div>
-        )}
+        <div className="flex justify-center border-t border-line/60 p-2">
+          <button
+            type="button"
+            className="label rounded border border-line px-2 py-1 hover:border-info disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={loadOlderDisabled}
+            onClick={loadOlder}
+          >
+            {infinite.isFetching ? "Loading…" : "Load older"}
+          </button>
+        </div>
       </Panel>
 
       {selectedCmd && (
