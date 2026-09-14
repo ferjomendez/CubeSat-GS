@@ -131,6 +131,13 @@ class PassPredictor:
     def enabled(self) -> bool:
         return self._sat is not None
 
+    @property
+    def tle_source(self) -> str:
+        return self._tle_source
+
+    def set_tle_source(self, url: str) -> None:
+        self._tle_source = url
+
     def _load_tle(self, l1: str, l2: str) -> None:
         l1, l2 = (l1 or "").strip(), (l2 or "").strip()
         if not l1 or not l2:

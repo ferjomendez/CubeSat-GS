@@ -224,6 +224,15 @@ class TrackPoint(BaseModel):
     doppler_hz: float
 
 
+class PassHistoryOut(BaseModel):
+    items: list[dict[str, Any]]
+
+
+class TLEOut(BaseModel):
+    line1: str
+    line2: str
+
+
 class SerialPortOut(BaseModel):
     device: str
     description: str
