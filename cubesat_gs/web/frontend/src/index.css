@@ -16,6 +16,7 @@
   --warn: 41 76% 51%;
   --alarm: 358 75% 59%;
   --info: 210 77% 60%;
+  --info-dim: 210 45% 16%;
   color-scheme: dark;
 }
 html, body, #root { height: 100%; }

@@ -8,6 +8,7 @@ export default {
         bg: "hsl(var(--bg))", raised: "hsl(var(--bg-raised))", line: "hsl(var(--line))",
         fg: "hsl(var(--text))", dim: "hsl(var(--text-dim))",
         nominal: "hsl(var(--nominal))", warn: "hsl(var(--warn))", alarm: "hsl(var(--alarm))", info: "hsl(var(--info))",
+        "info-dim": "hsl(var(--info-dim))",
         // shadcn tokens
         background: "hsl(var(--bg))", foreground: "hsl(var(--text))", border: "hsl(var(--line))", input: "hsl(var(--line))",
         ring: "hsl(var(--info))", primary: { DEFAULT: "hsl(var(--info))", foreground: "hsl(var(--bg))" },

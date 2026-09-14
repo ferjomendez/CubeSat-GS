@@ -14,8 +14,8 @@ import { Overview } from "@/views/Overview";
 import LiveFeed from "@/views/LiveFeed";
 import { Telemetry } from "@/views/Telemetry";
 import Telecommand from "@/views/Telecommand";
-import { Passes } from "@/views/Passes";
-import { Settings } from "@/views/Settings";
+import PassTracker from "@/views/PassTracker";
+import Settings from "@/views/Settings";
 
 const queryClient = new QueryClient();
 
@@ -74,7 +74,7 @@ function Layout() {
             <Route path="/feed" element={<LiveFeed />} />
             <Route path="/telemetry" element={<Telemetry />} />
             <Route path="/commands" element={<Telecommand />} />
-            <Route path="/passes" element={<Passes />} />
+            <Route path="/passes" element={<PassTracker />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>

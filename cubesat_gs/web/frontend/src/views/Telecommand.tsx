@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -7,10 +7,10 @@ import type { CommandDefOut, CommandHistoryOut, CommandRecordOut, CommandStatus 
 import { AlarmBadge } from "@/components/AlarmBadge";
 import { CommandDialog } from "@/components/CommandDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { MutationButton } from "@/components/MutationButton";
 import { Panel } from "@/components/Panel";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fmtBytes } from "@/lib/format";
 import { age, local, utc } from "@/lib/time";
 import { useGs } from "@/store/gs";
@@ -22,8 +22,6 @@ const STATUS_TONE: Record<CommandStatus, "nominal" | "info" | "warn" | "alarm"> 
   failed: "alarm",
   refused: "alarm",
 };
-
-const DISCONNECTED_TITLE = "Ground station connection lost";
 
 function validateRawHex(raw: string): { clean: string; error: string | null; bytes: string | null } {
   const clean = raw.replace(/\s+/g, "").toUpperCase();
@@ -40,43 +38,6 @@ function toastError(err: unknown, name: string) {
   } else {
     toast.error(`Failed to send ${name}`);
   }
-}
-
-/**
- * A mutation button gated on `!connected`. Chromium suppresses the native `title` tooltip on
- * disabled controls, so when disconnected the button is wrapped in a Radix tooltip instead —
- * Radix needs a focusable, non-disabled trigger element, hence the `span` wrapper (the standard
- * pattern for tooltips on disabled controls). Only wrapped while actually disconnected: when
- * connected, `disabled` may still be true for other reasons (e.g. invalid input) that have
- * nothing to do with the connection, so no connection tooltip is shown for those.
- */
-function MutationButton({
-  connected,
-  disabled,
-  onClick,
-  className,
-  children,
-}: {
-  connected: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  className: string;
-  children: ReactNode;
-}) {
-  const button = (
-    <button type="button" disabled={!connected || disabled} onClick={onClick} className={className}>
-      {children}
-    </button>
-  );
-  if (connected) return button;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0}>{button}</span>
-      </TooltipTrigger>
-      <TooltipContent>{DISCONNECTED_TITLE}</TooltipContent>
-    </Tooltip>
-  );
 }
 
 /** Ticks every second while a command is pending, showing elapsed time since it was sent. */
