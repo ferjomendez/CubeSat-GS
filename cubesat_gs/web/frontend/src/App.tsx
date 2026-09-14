@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { DisconnectedBanner } from "@/components/DisconnectedBanner";
 import { StatusStrip } from "@/components/StatusStrip";
 import { Overview } from "@/views/Overview";
-import { Feed } from "@/views/Feed";
+import LiveFeed from "@/views/LiveFeed";
 import { Telemetry } from "@/views/Telemetry";
 import { Commands } from "@/views/Commands";
 import { Passes } from "@/views/Passes";
@@ -70,7 +70,7 @@ function Layout() {
         <main className="min-h-0 flex-1 overflow-auto p-4">
           <Routes>
             <Route path="/" element={<Overview />} />
-            <Route path="/feed" element={<Feed />} />
+            <Route path="/feed" element={<LiveFeed />} />
             <Route path="/telemetry" element={<Telemetry />} />
             <Route path="/commands" element={<Commands />} />
             <Route path="/passes" element={<Passes />} />
