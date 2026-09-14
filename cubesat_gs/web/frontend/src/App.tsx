@@ -12,7 +12,7 @@ import { StatusStrip } from "@/components/StatusStrip";
 import { Overview } from "@/views/Overview";
 import LiveFeed from "@/views/LiveFeed";
 import { Telemetry } from "@/views/Telemetry";
-import { Commands } from "@/views/Commands";
+import Telecommand from "@/views/Telecommand";
 import { Passes } from "@/views/Passes";
 import { Settings } from "@/views/Settings";
 
@@ -72,7 +72,7 @@ function Layout() {
             <Route path="/" element={<Overview />} />
             <Route path="/feed" element={<LiveFeed />} />
             <Route path="/telemetry" element={<Telemetry />} />
-            <Route path="/commands" element={<Commands />} />
+            <Route path="/commands" element={<Telecommand />} />
             <Route path="/passes" element={<Passes />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

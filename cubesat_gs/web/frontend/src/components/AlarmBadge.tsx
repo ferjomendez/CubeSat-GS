@@ -1,17 +1,19 @@
 import { cn } from "@/lib/utils";
 
-type Tone = "nominal" | "warn" | "alarm";
+type Tone = "nominal" | "warn" | "alarm" | "info";
 
 const DOT_CLASS: Record<Tone, string> = {
   nominal: "bg-nominal",
   warn: "bg-warn",
   alarm: "bg-alarm",
+  info: "bg-info",
 };
 
 const TEXT_CLASS: Record<Tone, string> = {
   nominal: "text-nominal",
   warn: "text-warn",
   alarm: "text-alarm",
+  info: "text-info",
 };
 
 /** A dot + label indicating alarm state (nominal / low / high mapped to warn / alarm tones by the caller). */
