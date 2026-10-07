@@ -1,7 +1,7 @@
 pyserial>=3.5
 pyserial-asyncio>=0.6
 motor>=3.4
-pymongo[srv]>=4.6
+pymongo>=4.6
 aiosqlite>=0.20
 pyyaml>=6
 python-dotenv>=1

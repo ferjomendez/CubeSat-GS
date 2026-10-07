@@ -11,6 +11,23 @@ Phase 1 + 2 (this state): headless core, FastAPI/WebSocket backend, React dashbo
 - `cubesat_comms-main/` — reference satellite-side code (ESP32 firmware, OBC simulator)
 - `docs/superpowers/specs/` — design specs; `docs/superpowers/plans/` — implementation plans
 
+## Quick start (one line)
+
+Clone, install and run with the ESP32 modem plugged in (port is auto-detected), then open http://localhost:8080:
+
+```bash
+# bash / cmd / PowerShell 7+  (on Linux/Raspberry Pi use python3)
+git clone https://github.com/ferjomendez/CubeSat-GS.git && cd CubeSat-GS && python -m pip install -r cubesat_gs/requirements.txt && python cubesat_gs/main.py
+```
+
+```powershell
+# Windows PowerShell 5.1 (the default "PowerShell" on Windows)
+git clone https://github.com/ferjomendez/CubeSat-GS.git; cd CubeSat-GS; python -m pip install -r cubesat_gs/requirements.txt; python cubesat_gs/main.py
+```
+
+Already cloned? From the repo root: `python cubesat_gs/main.py`. No hardware? Add `--sim`.
+Close the Arduino Serial Monitor first: only one program can hold the COM port.
+
 ## Setup
 
 ```bash
