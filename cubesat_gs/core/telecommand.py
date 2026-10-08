@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from cubesat_gs.core import ccsds
+from cubesat_gs.core import ccsds, cfs
 from cubesat_gs.core.config import CommandConfig
 from cubesat_gs.core.events import CommandCompleted, CommandStarted, EventBus, PacketReceived, now
 from cubesat_gs.core.frequency_manager import Mode
@@ -42,6 +42,12 @@ class CommandDef:
     response_apid: int | None
     timeout: float
     critical: bool
+    # cFS commands (msg_id set): header = MsgId + function code + checksum, payload = encoded args
+    msg_id: int | None = None
+    function_code: int = 0
+    args: tuple[cfs.ArgDef, ...] = ()
+    byte_order: str = "little"
+    retune: dict[str, str] | None = None  # {"downlink": <arg>, "uplink": <arg>} applied after TX
 
 
 @dataclass
@@ -75,16 +81,36 @@ def load_commands(path: str | Path, default_timeout: float) -> dict[str, Command
         data = yaml.safe_load(fh) or {}
     out: dict[str, CommandDef] = {}
     for i, c in enumerate(data.get("commands") or []):
-        if not isinstance(c, dict) or "name" not in c or "apid" not in c:
-            raise ValueError(f"{path}: commands[{i}] needs 'name' and 'apid'")
+        if not isinstance(c, dict) or "name" not in c or ("apid" not in c and "msg_id" not in c):
+            raise ValueError(f"{path}: commands[{i}] needs 'name' and 'apid' or 'msg_id'")
         name = str(c["name"])
         if name in out:
             raise ValueError(f"{path}: duplicate command {name!r}")
+        where = f"{path}: {name}"
+        msg_id = None if c.get("msg_id") is None else int(c["msg_id"])
+        if msg_id is not None:
+            apid = cfs.split_msg_id(msg_id)[2]
+        else:
+            apid = int(c["apid"])
+        args = tuple(cfs.parse_arg(f"{where}.args[{j}]", a) for j, a in enumerate(c.get("args") or []))
+        if args and msg_id is None:
+            raise ValueError(f"{where}: 'args' need a cFS 'msg_id'")
+        byte_order = str(c.get("byte_order", "little"))
+        if byte_order not in ("little", "big"):
+            raise ValueError(f"{where}: byte_order must be 'little' or 'big'")
+        retune = c.get("retune")
+        if retune is not None:
+            names = {a.name for a in args}
+            if not isinstance(retune, dict) or set(retune) - {"downlink", "uplink"} or                     any(v not in names for v in retune.values()):
+                raise ValueError(f"{where}: retune maps 'downlink'/'uplink' to arg names")
+            retune = {str(k): str(v) for k, v in retune.items()}
         out[name] = CommandDef(
-            name=name, description=str(c.get("description", "")), apid=int(c["apid"]),
+            name=name, description=str(c.get("description", "")), apid=apid,
             payload=_payload_bytes(c.get("payload", "")),
             response_apid=None if c.get("response_apid") is None else int(c["response_apid"]),
             timeout=float(c.get("timeout", default_timeout)), critical=bool(c.get("critical", False)),
+            msg_id=msg_id, function_code=int(c.get("function_code", 0)), args=args,
+            byte_order=byte_order, retune=retune,
         )
     return out
 
@@ -104,18 +130,29 @@ class TelecommandManager:
 
     # ---- public
     async def send_command(self, name: str, *, confirm: bool = False,
-                           payload_override: bytes | None = None) -> CommandRecord:
+                           payload_override: bytes | None = None,
+                           args: dict[str, Any] | None = None) -> CommandRecord:
+        """Raises cfs.CommandArgError (a ValueError) when args do not fit the command."""
         cdef = self.commands.get(name)
         if cdef is None:
             raise UnknownCommandError(name)
-        payload = cdef.payload if payload_override is None else payload_override
+        if payload_override is not None:
+            payload = payload_override
+        elif cdef.msg_id is not None:
+            payload = cfs.encode_args(cdef.args, args, cdef.byte_order)
+        else:
+            payload = cdef.payload
         if cdef.critical and not confirm:
             rec = CommandRecord(now(), name, payload.hex().upper(), "refused",
                                 error="critical command requires confirm=True")
             self._finish(rec)
             return rec
-        return await self._execute(cdef.name, self._builder.build(cdef.apid, payload),
-                                   cdef.response_apid, cdef.timeout)
+        if cdef.msg_id is not None:
+            raw = cfs.build_command(self._builder, cdef.msg_id, cdef.function_code, payload)
+        else:
+            raw = self._builder.build(cdef.apid, payload)
+        return await self._execute(cdef.name, raw, cdef.response_apid, cdef.timeout,
+                                   retune=_retune_targets(cdef, args))
 
     async def send_raw(self, hex_str: str, *, confirm: bool = False) -> CommandRecord:
         try:
@@ -131,7 +168,7 @@ class TelecommandManager:
 
     # ---- core
     async def _execute(self, name: str, raw: bytes, response_apid: int | None,
-                       timeout: float) -> CommandRecord:
+                       timeout: float, retune: tuple[float | None, float | None] | None = None) -> CommandRecord:
         if self._freq.mode is not Mode.TCTM:
             raise WrongModeError(f"frequency mode is {self._freq.mode.value}, need tctm")
         if self.pending is not None:
@@ -144,10 +181,16 @@ class TelecommandManager:
                 if attempt == 1:
                     self._bus.publish(CommandStarted(name=name, raw_hex=raw.hex().upper()))
                 try:
-                    await self._serial.send_tx(raw)
+                    await self._freq.transmit(lambda: self._serial.send_tx(raw))
                 except (SerialCommandTimeout, SerialDisconnected) as e:
                     rec.status, rec.error = "failed", f"{type(e).__name__}: {e}"
                     break
+                if retune is not None and attempt == 1:
+                    # the satellite answers on the link it was just told to use
+                    try:
+                        await self._freq.retune_link(*retune)
+                    except (SerialCommandTimeout, SerialDisconnected) as e:
+                        log.warning("telecommand: %s sent but retune failed: %s", name, e)
                 t0 = time.monotonic()
                 if response_apid is None:
                     rec.status = "acked"
@@ -177,6 +220,19 @@ class TelecommandManager:
         log.info("telecommand: %s -> %s (attempts=%d, latency=%s)", rec.name, rec.status,
                  rec.attempts, rec.latency_ms)
         self._bus.publish(CommandCompleted(record=rec))
+
+
+def _retune_targets(cdef: CommandDef, args: dict[str, Any] | None) -> tuple[float | None, float | None] | None:
+    """(downlink_mhz, uplink_mhz) the command switches the satellite to; None = unchanged."""
+    if not cdef.retune:
+        return None
+    values = cfs.resolved_args(cdef.args, args)
+
+    def mhz(key: str) -> float | None:
+        v = values.get(cdef.retune.get(key, ""))
+        return None if v is None or str(v).strip() == "" else cfs.parse_freq(v)
+
+    return mhz("downlink"), mhz("uplink")
 
 
 def _apid_of(raw: bytes) -> int | None:

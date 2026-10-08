@@ -7,9 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { fmtBytes } from "@/lib/format";
 
+const hex4 = (n: number) => "0x" + n.toString(16).toUpperCase().padStart(4, "0");
+
 /**
- * Send confirmation for a defined command: payload preview, an optional hex override, and — for
- * critical commands — an alarm-dim warning callout whose checkbox gates the confirm button.
+ * Send confirmation for a defined command: payload preview (or, for cFS commands, MsgId/function
+ * code and one input per argument), an optional hex override, and — for critical commands — an
+ * alarm-dim warning callout whose checkbox gates the confirm button.
  */
 export function CommandDialog({
   cmd,
@@ -20,17 +23,21 @@ export function CommandDialog({
   cmd: CommandDefOut;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (payloadHexOverride: string | null) => void;
+  onConfirm: (payloadHexOverride: string | null, args: Record<string, string> | null) => void;
 }) {
+  const cmdArgs = cmd.args ?? [];
   // The dialog only exists in the tree while `open` — the parent renders it conditionally on the
   // selected command and unmounts it on cancel/confirm — so a fresh mount already starts with
   // reset state; no effect is needed to clear it.
   const [override, setOverride] = useState("");
   const [understood, setUnderstood] = useState(false);
+  const [argValues, setArgValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(cmdArgs.map((a) => [a.name, a.default == null ? "" : String(a.default)])),
+  );
 
   const confirm = () => {
     const hex = override.trim().replace(/\s+/g, "").toUpperCase();
-    onConfirm(hex ? hex : null);
+    onConfirm(hex ? hex : null, cmdArgs.length ? argValues : null);
     onOpenChange(false);
   };
 
@@ -43,12 +50,36 @@ export function CommandDialog({
         </DialogHeader>
 
         <div className="space-y-3">
-          <div>
-            <div className="label">Payload</div>
-            <div className="font-mono text-[13px] tabular-nums">
-              {cmd.payload_text ?? cmd.payload_hex} <span className="text-dim">({fmtBytes(cmd.payload_hex)})</span>
+          {cmd.msg_id != null ? (
+            <div>
+              <div className="label">cFS header</div>
+              <div className="font-mono text-[13px] tabular-nums">
+                MsgId {hex4(cmd.msg_id)} · FC {cmd.function_code ?? 0}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div>
+              <div className="label">Payload</div>
+              <div className="font-mono text-[13px] tabular-nums">
+                {cmd.payload_text ?? cmd.payload_hex} <span className="text-dim">({fmtBytes(cmd.payload_hex)})</span>
+              </div>
+            </div>
+          )}
+          {cmdArgs.map((a) => (
+            <div key={a.name} className="space-y-1">
+              <Label htmlFor={`arg-${a.name}`}>
+                {a.name}
+                <span className="text-dim"> ({a.type === "freq" ? "MHz" : a.type}{a.optional ? ", optional" : ""})</span>
+              </Label>
+              <Input
+                id={`arg-${a.name}`}
+                className="font-mono"
+                value={argValues[a.name] ?? ""}
+                onChange={(e) => setArgValues((v) => ({ ...v, [a.name]: e.target.value }))}
+              />
+              {a.description && <div className="text-dim text-[12px]">{a.description}</div>}
+            </div>
+          ))}
           <div className="space-y-1">
             <Label htmlFor="payload-override">Override payload (hex)</Label>
             <Input

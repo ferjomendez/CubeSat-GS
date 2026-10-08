@@ -70,8 +70,12 @@ python -m pytest -q
 
 ## Protocol notes
 
-The parser defaults follow the current OBC code (`cubesat_comms-main/OBC_sim.py`), which differs from
-strict CCSDS in two ways; both are switches in `cubesat_gs/config/gs_config.yaml`:
+The defaults target the cFS OBC ([vaquitson/uai_obc](https://github.com/vaquitson/uai_obc), `mision_doc/functionality.md`):
+cFE command/telemetry headers, little-endian payloads, standard CCSDS length, per-APID sequence counters.
+See [docs/obc-cfs-integration.md](docs/obc-cfs-integration.md) for the contract and the open issues with the OBC code.
+Start a session with `TELECOM_OPEN_TLM`: the OBC downlinks nothing before it.
+
+For the legacy OBC (`cubesat_comms-main/OBC_sim.py`) set in `cubesat_gs/config/gs_config.yaml`:
 
 - `ccsds.length_includes_crc: true` — the OBC counts the 2 CRC bytes in the data-length field.
 - `ccsds.sequence_scope: global` — the OBC uses one sequence counter for all APIDs.

@@ -5,6 +5,7 @@ import asyncio
 import logging
 from collections import deque
 from enum import Enum
+from typing import Awaitable, Callable
 
 from cubesat_gs.core.config import FrequencyConfig
 from cubesat_gs.core.events import ConnectionChanged, EventBus, FrequencyChanged
@@ -51,8 +52,36 @@ class FrequencyManager:
             raise ValueError("CUSTOM mode requires an explicit mhz")
         return float(mhz)
 
+    @property
+    def uplink_mhz(self) -> float:
+        """Where telecommands are transmitted in TCTM mode (the satellite's listening frequency)."""
+        return self._cfg.tctm if self._cfg.uplink is None else self._cfg.uplink
+
     def set_presets(self, tctm: float, beacon: float) -> None:
         self._cfg.tctm, self._cfg.beacon = float(tctm), float(beacon)
+
+    async def transmit(self, send: Callable[[], Awaitable[None]]) -> None:
+        """Run send() on the uplink frequency, then return the modem to the current RX frequency."""
+        async with self._lock:
+            uplink = self.uplink_mhz if self._mode is Mode.TCTM else self._mhz
+            if uplink == self._mhz:
+                await send()
+                return
+            await self._serial.set_frequency(uplink)
+            try:
+                await send()
+            finally:
+                await self._serial.set_frequency(self._mhz)
+
+    async def retune_link(self, downlink: float | None, uplink: float | None) -> None:
+        """Follow a satellite link change (e.g. TELECOM_OPEN_TLM); None leaves that side unchanged."""
+        if uplink is not None:
+            self._cfg.uplink = float(uplink)
+        if downlink is not None:
+            self._cfg.tctm = float(downlink)
+            if self._mode is Mode.TCTM and self._cfg.tctm != self._mhz:
+                await self.set_mode(Mode.TCTM)
+        log.info("frequency: link is now RX %.3f / TX %.3f MHz", self._cfg.tctm, self.uplink_mhz)
 
     async def set_mode(self, mode: Mode, mhz: float | None = None) -> None:
         target = self._target_mhz(mode, mhz)

@@ -172,6 +172,15 @@ export interface TelemetryDefsOut {
   definitions: TelemetryDefOut[];
 }
 
+export interface CommandArgOut {
+  name: string;
+  type: string; // string | freq | uint8 ... float64
+  length: number | null;
+  default: string | number | null;
+  optional: boolean;
+  description: string;
+}
+
 export interface CommandDefOut {
   name: string;
   description: string;
@@ -181,6 +190,9 @@ export interface CommandDefOut {
   response_apid: number | null;
   timeout: number;
   critical: boolean;
+  msg_id: number | null; // cFS MsgId; null for legacy APID commands
+  function_code: number | null;
+  args: CommandArgOut[];
 }
 
 export interface CommandHistoryOut {
@@ -191,6 +203,7 @@ export interface CommandHistoryOut {
 export interface SendCommandIn {
   confirm?: boolean;
   payload_hex?: string | null;
+  args?: Record<string, string | number> | null;
 }
 
 export interface SendRawIn {

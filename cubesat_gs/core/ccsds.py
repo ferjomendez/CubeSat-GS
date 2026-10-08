@@ -139,10 +139,10 @@ class PacketBuilder:
     def next_count(self, apid: int) -> int:
         return self._counters.get(apid, 0)
 
-    def build(self, apid: int, payload: bytes, packet_type: int = 1) -> bytes:
+    def build(self, apid: int, payload: bytes, packet_type: int = 1, sec_header_flag: bool = False) -> bytes:
         seq = self._counters.get(apid, 0)
         raw = build(apid, payload, sequence_count=seq, packet_type=packet_type,
-                    length_includes_crc=self._length_includes_crc)
+                    sec_header_flag=sec_header_flag, length_includes_crc=self._length_includes_crc)
         self._counters[apid] = (seq + 1) & _MAX_SEQ
         return raw
 

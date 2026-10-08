@@ -56,7 +56,7 @@ async def test_telemetry_latest_and_definitions(web_stack):
     defs = {d["apid"]: d for d in body["definitions"]}
     assert defs[10]["name"] == "Beacon" and defs[101]["fields"][0]["name"] == "response_data"
     r = await client.get("/api/telemetry/definitions")
-    assert "apid_10" in r.json()["yaml"] and len(r.json()["definitions"]) == 2
+    assert "apid_10" in r.json()["yaml"] and len(r.json()["definitions"]) == len(station.decoder.definitions)
 
 
 async def test_telemetry_history_downsamples(web_stack, tmp_path):

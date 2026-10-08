@@ -68,7 +68,8 @@ async def mongo_web_stack(tmp_path, monkeypatch):
     cfg.database.mongo_uri = "mongodb://fake"
     cfg.logging.file = str(tmp_path / "gs.log")
     mongo_client = BsonMotorClient()
-    sim = ModemSimulator(beacon_interval=0.1)
+    sim = ModemSimulator(beacon_interval=0.1, length_includes_crc=cfg.ccsds.length_includes_crc,
+                         sequence_scope=cfg.ccsds.sequence_scope)
     await sim.start()
     ser = SimulatedSerial(sim)
     station = GroundStation(cfg, open_connection=ser.open, mongo_client_factory=lambda uri: mongo_client)
@@ -95,7 +96,8 @@ async def web_stack(tmp_path, monkeypatch):
     cfg.database.local_fallback_path = str(tmp_path / "gs.db")
     cfg.database.mongo_uri = None
     cfg.logging.file = str(tmp_path / "gs.log")
-    sim = ModemSimulator(beacon_interval=0.1)
+    sim = ModemSimulator(beacon_interval=0.1, length_includes_crc=cfg.ccsds.length_includes_crc,
+                         sequence_scope=cfg.ccsds.sequence_scope)
     await sim.start()
     ser = SimulatedSerial(sim)
     station = GroundStation(cfg, open_connection=ser.open)

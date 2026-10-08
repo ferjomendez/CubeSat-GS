@@ -17,7 +17,8 @@ router = APIRouter()
 def _defs(station: GroundStation) -> list[dict]:
     return [{"apid": apid, "name": d.name,
              "fields": [{"name": f.name, "type": f.type, "unit": f.unit,
-                         "alarm_low": f.alarm_low, "alarm_high": f.alarm_high} for f in d.fields]}
+                         "alarm_low": f.alarm_low, "alarm_high": f.alarm_high}
+                        for f in d.fields if f.type != "pad"]}
             for apid, d in sorted(station.decoder.definitions.items())]
 
 

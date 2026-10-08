@@ -35,6 +35,26 @@ describe("Telecommand", () => {
     expect(calls.find((c) => c.url === "/api/commands/PING")?.body).toEqual({ confirm: false, payload_hex: null });
   });
 
+  it("cFS command shows its arguments and sends them", async () => {
+    const openTlm = { name: "TELECOM_OPEN_TLM", description: "Open the telemetry downlink", apid: 122, payload_hex: "", payload_text: "",
+      response_apid: 125, timeout: 10, critical: false, msg_id: 0x187a, function_code: 2,
+      args: [
+        { name: "downlink_freq", type: "freq", length: 16, default: 435.5, optional: false, description: "" },
+        { name: "uplink_freq", type: "freq", length: 16, default: 435.5, optional: true, description: "" },
+      ] };
+    const calls = mockFetch({ "/api/commands": [openTlm], "/api/commands/history": { items: [], next_before: null },
+      "/api/commands/TELECOM_OPEN_TLM": { ts: "t", name: "TELECOM_OPEN_TLM", raw_hex: "18", status: "responded", response_hex: "007D", latency_ms: 9, attempts: 1, error: null, pending: false } });
+    render(<QueryClientProvider client={new QueryClient()}><Telecommand /></QueryClientProvider>);
+    await screen.findByText("Open the telemetry downlink");
+    fireEvent.click(screen.getAllByRole("button", { name: /send/i })[0]);
+    expect(await screen.findByText(/MsgId 0x187A · FC 2/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/downlink_freq/), { target: { value: "436" } });
+    fireEvent.click(screen.getByRole("button", { name: /send telecom_open_tlm/i }));
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/commands/TELECOM_OPEN_TLM")).toBe(true));
+    expect(calls.find((c) => c.url === "/api/commands/TELECOM_OPEN_TLM")?.body).toEqual({
+      confirm: false, payload_hex: null, args: { downlink_freq: "436", uplink_freq: "435.5" } });
+  });
+
   it("critical command requires the checkbox", async () => {
     mockFetch({ "/api/commands": defs, "/api/commands/history": { items: [], next_before: null } });
     render(<QueryClientProvider client={new QueryClient()}><Telecommand /></QueryClientProvider>);

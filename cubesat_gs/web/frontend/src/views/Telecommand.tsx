@@ -112,9 +112,10 @@ export default function Telecommand() {
   // hasNextPage is unset, so the button starts out enabled.
   const loadOlderDisabled = infinite.isFetching || (infinite.data != null && infinite.hasNextPage === false);
 
-  const sendCommand = async (cmd: CommandDefOut, payloadHex: string | null) => {
+  const sendCommand = async (cmd: CommandDefOut, payloadHex: string | null, args: Record<string, string> | null) => {
     try {
-      const rec = await api.post<CommandRecordOut>(`/api/commands/${cmd.name}`, { confirm: cmd.critical, payload_hex: payloadHex });
+      const body = { confirm: cmd.critical, payload_hex: payloadHex, ...(args ? { args } : {}) };
+      const rec = await api.post<CommandRecordOut>(`/api/commands/${cmd.name}`, body);
       toast(`Sent ${cmd.name} — ${rec.status}`);
     } catch (err) {
       toastError(err, cmd.name);
@@ -260,7 +261,7 @@ export default function Telecommand() {
           onOpenChange={(open) => {
             if (!open) setSelectedCmd(null);
           }}
-          onConfirm={(payloadHex) => void sendCommand(selectedCmd, payloadHex)}
+          onConfirm={(payloadHex, args) => void sendCommand(selectedCmd, payloadHex, args)}
         />
       )}
 

@@ -7,12 +7,13 @@ serial:
     freq: 2.0               # seconds to wait for OK:FREQ_SET
 
 frequencies:
-  tctm: 435.500
+  tctm: 435.500             # RX (satellite downlink) in TCTM mode
   beacon: 437.250
+  uplink: null              # TX (satellite uplink) in TCTM mode; null = same as tctm
 
 ccsds:
-  length_includes_crc: true   # OBC_sim.py convention; false when OBC becomes standard-compliant
-  sequence_scope: global      # global | per_apid
+  length_includes_crc: false  # cFS OBC: standard CCSDS length, no CRC (true = legacy OBC_sim.py)
+  sequence_scope: per_apid    # cFS counts per MsgId (global = legacy OBC_sim.py)
 
 station:
   name: "UAI Ground Station"

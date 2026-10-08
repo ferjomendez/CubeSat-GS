@@ -27,7 +27,8 @@ async def gs(tmp_path, monkeypatch):
     cfg.serial.timeouts.freq = 0.5
     cfg.database.local_fallback_path = str(tmp_path / "gs.db")
     cfg.database.mongo_uri = None
-    sim = ModemSimulator(beacon_interval=0.1)
+    sim = ModemSimulator(beacon_interval=0.1, length_includes_crc=cfg.ccsds.length_includes_crc,
+                         sequence_scope=cfg.ccsds.sequence_scope)
     await sim.start()
     ser = SimulatedSerial(sim)
     station = GroundStation(cfg, open_connection=ser.open)

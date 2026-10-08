@@ -13,7 +13,8 @@ router = APIRouter()
 def _out(station: GroundStation) -> dict:
     f = station.freq
     return {"mode": f.mode.value, "mhz": f.mhz,
-            "presets": {"tctm": station.cfg.frequencies.tctm, "beacon": station.cfg.frequencies.beacon},
+            "presets": {"tctm": station.cfg.frequencies.tctm, "beacon": station.cfg.frequencies.beacon,
+                        "uplink": f.uplink_mhz},
             "history": [{"ts": h.ts.isoformat(), "mode": h.mode.value, "mhz": h.mhz} for h in list(f.history)[-20:]]}
 
 

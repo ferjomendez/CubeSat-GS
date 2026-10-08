@@ -5,6 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 
+from cubesat_gs.core.cfs import CommandArgError
 from cubesat_gs.core.station import GroundStation
 from cubesat_gs.web.deps import ApiError, get_station
 from cubesat_gs.web.schemas import CommandDefOut, CommandHistoryOut, CommandRecordOut, SendCommandIn, SendRawIn
@@ -19,7 +20,9 @@ def _def_out(c) -> dict:
     except UnicodeDecodeError:
         text = None
     return {"name": c.name, "description": c.description, "apid": c.apid, "payload_hex": c.payload.hex().upper(),
-            "payload_text": text, "response_apid": c.response_apid, "timeout": c.timeout, "critical": c.critical}
+            "payload_text": text, "response_apid": c.response_apid, "timeout": c.timeout, "critical": c.critical,
+            "msg_id": c.msg_id, "function_code": c.function_code if c.msg_id is not None else None,
+            "args": [a.as_dict() for a in c.args]}
 
 
 def _rec_out(rec) -> dict:
@@ -103,7 +106,11 @@ async def send_command(name: str, body: SendCommandIn, station: GroundStation = 
     if body.confirm or not cdef.critical:
         _guard_serial(station)
     payload = bytes.fromhex(body.payload_hex.replace(" ", "")) if body.payload_hex else None
-    rec = await station.telecommand.send_command(name, confirm=body.confirm, payload_override=payload)
+    try:
+        rec = await station.telecommand.send_command(name, confirm=body.confirm, payload_override=payload,
+                                                     args=body.args)
+    except CommandArgError as e:
+        raise ApiError(422, "invalid_args", str(e)) from e
     if rec.status == "refused":
         detail = json.dumps(CommandRecordOut.model_validate(rec.as_dict()).model_dump(mode="json"))
         raise ApiError(403, "confirm_required", detail)

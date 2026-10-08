@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from cubesat_gs.core import ccsds
+from cubesat_gs.core import ccsds, cfs
 from cubesat_gs.core.config import CCSDSConfig
 from cubesat_gs.core.events import (AlarmRaised, EventBus, PacketDecoded, PacketMalformed,
                                     PacketReceived, SequenceGap)
@@ -19,9 +19,11 @@ log = logging.getLogger(__name__)
 NUMERIC_TYPES = {
     "uint8": ">B", "int8": ">b", "uint16": ">H", "int16": ">h",
     "uint32": ">I", "int32": ">i", "float32": ">f",
+    "uint64": ">Q", "int64": ">q", "float64": ">d",
 }
 _NUMERIC = NUMERIC_TYPES  # backward compatibility alias
-_TYPES = set(NUMERIC_TYPES) | {"string", "bytes"}
+_TYPES = set(NUMERIC_TYPES) | {"string", "bytes", "pad"}
+_SECONDARY_HEADERS = {"none": 0, "cfs_tlm": cfs.TLM_SEC_HDR_LEN}
 
 
 class TelemetryDefError(ValueError):
@@ -45,7 +47,9 @@ class FieldDef:
 class ApidDef:
     apid: int
     name: str
-    fields: tuple[FieldDef, ...]
+    fields: tuple[FieldDef, ...]  # includes "pad" entries; they are skipped, never emitted
+    byte_order: str = "big"
+    secondary_header: str = "none"
 
 
 @dataclass
@@ -79,6 +83,8 @@ def _parse_field(apid_key: str, raw: dict) -> FieldDef:
         raise TelemetryDefError(f"{where}: unknown type {t!r}")
     if t in NUMERIC_TYPES and "length" in raw:
         raise TelemetryDefError(f"{where}: 'length' is only valid for string/bytes")
+    if t == "pad" and raw.get("length") is None:
+        raise TelemetryDefError(f"{where}: 'pad' needs a 'length'")
     if t not in NUMERIC_TYPES and ("scale" in raw or "offset" in raw):
         raise TelemetryDefError(f"{where}: 'scale'/'offset' only valid for numeric types")
     if t not in NUMERIC_TYPES and (raw.get("alarm_low") is not None or raw.get("alarm_high") is not None):
@@ -123,7 +129,14 @@ def load_definitions(path: str | Path) -> dict[int, ApidDef]:
             raise TelemetryDefError(f"bad apid in key {key!r}") from e
         body = body or {}
         fields = tuple(_parse_field(str(key), f) for f in (body.get("fields") or []))
-        defs[apid] = ApidDef(apid=apid, name=str(body.get("name", f"APID {apid}")), fields=fields)
+        byte_order = str(body.get("byte_order", "big"))
+        if byte_order not in ("big", "little"):
+            raise TelemetryDefError(f"{key}: byte_order must be 'big' or 'little'")
+        sec = str(body.get("secondary_header", "none"))
+        if sec not in _SECONDARY_HEADERS:
+            raise TelemetryDefError(f"{key}: secondary_header must be one of {sorted(_SECONDARY_HEADERS)}")
+        defs[apid] = ApidDef(apid=apid, name=str(body.get("name", f"APID {apid}")), fields=fields,
+                             byte_order=byte_order, secondary_header=sec)
     return defs
 
 
@@ -139,17 +152,24 @@ def _alarm(value: float, fd: FieldDef) -> str | None:
 
 def decode_payload(apid_def: ApidDef, payload: bytes) -> DecodedPacket:
     out = DecodedPacket(apid=apid_def.apid, apid_name=apid_def.name)
-    pos = 0
+    pos = _SECONDARY_HEADERS[apid_def.secondary_header]
+    if len(payload) < pos:
+        out.partial, out.error = True, "packet shorter than its secondary header"
+        return out
+    endian = "<" if apid_def.byte_order == "little" else ">"
     for fd in apid_def.fields:
+        if fd.type == "pad":
+            pos += fd.length or 0
+            continue
         if fd.type in NUMERIC_TYPES:
-            fmt = _NUMERIC[fd.type]
+            fmt = endian + _NUMERIC[fd.type][1:]
             size = struct.calcsize(fmt)
             chunk = payload[pos:pos + size]
             if len(chunk) < size:
                 out.partial, out.error = True, f"payload exhausted at field {fd.name!r}"
                 break
             value = struct.unpack(fmt, chunk)[0] * fd.scale + fd.offset
-            if fd.type != "float32" and fd.scale == 1.0 and fd.offset == 0.0:
+            if not fd.type.startswith("float") and fd.scale == 1.0 and fd.offset == 0.0:
                 value = int(value)
             out.fields.append(DecodedField(fd.name, value, fd.unit, _alarm(value, fd), chunk))
         else:
@@ -158,7 +178,8 @@ def decode_payload(apid_def: ApidDef, payload: bytes) -> DecodedPacket:
                 out.partial, out.error = True, f"payload exhausted at field {fd.name!r}"
                 break
             size = len(chunk)
-            value: Any = chunk.decode(fd.encoding, errors="replace") if fd.type == "string" else bytes(chunk)
+            text = chunk.split(b"\x00", 1)[0] if fd.length is not None else chunk  # C char[N]
+            value: Any = text.decode(fd.encoding, errors="replace") if fd.type == "string" else bytes(chunk)
             out.fields.append(DecodedField(fd.name, value, fd.unit, None, chunk))
         pos += size
     return out

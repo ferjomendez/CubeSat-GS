@@ -41,6 +41,15 @@ class FakeSerial:
 class FakeFreq:
     mode = Mode.TCTM
 
+    def __init__(self):
+        self.retunes = []
+
+    async def transmit(self, send):
+        await send()
+
+    async def retune_link(self, downlink, uplink):
+        self.retunes.append((downlink, uplink))
+
 
 def _mgr(tmp_path, bus=None, serial=None, yaml_text=None, **cfg):
     bus = bus or EventBus()

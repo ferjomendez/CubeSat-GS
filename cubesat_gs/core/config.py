@@ -33,6 +33,7 @@ class SerialConfig:
 class FrequencyConfig:
     tctm: float = 435.500
     beacon: float = 437.250
+    uplink: float | None = None  # TX frequency in TCTM mode; None = same as tctm (RX/downlink)
 
 
 @dataclass

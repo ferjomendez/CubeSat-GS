@@ -85,7 +85,7 @@ def test_truncated_payload_is_partial(tmp_path):
 
 def test_invalid_definitions_rejected(tmp_path):
     with pytest.raises(TelemetryDefError, match="type"):
-        _decoder(tmp_path, "apid_1:\n  name: x\n  fields:\n    - {name: a, type: float64}\n")
+        _decoder(tmp_path, "apid_1:\n  name: x\n  fields:\n    - {name: a, type: float128}\n")
     with pytest.raises(TelemetryDefError, match="length"):
         _decoder(tmp_path, "apid_1:\n  name: x\n  fields:\n    - {name: a, type: uint8, length: 2}\n")
     with pytest.raises(TelemetryDefError, match="scale"):

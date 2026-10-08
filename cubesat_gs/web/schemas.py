@@ -172,6 +172,15 @@ class TelemetryDefsOut(BaseModel):
     definitions: list[TelemetryDefOut]
 
 
+class CommandArgOut(BaseModel):
+    name: str
+    type: str  # string | freq | uint8 ... float64
+    length: int | None
+    default: str | float | int | None
+    optional: bool
+    description: str
+
+
 class CommandDefOut(BaseModel):
     name: str
     description: str
@@ -181,6 +190,9 @@ class CommandDefOut(BaseModel):
     response_apid: int | None
     timeout: float
     critical: bool
+    msg_id: int | None  # cFS MsgId; None for legacy APID commands
+    function_code: int | None
+    args: list[CommandArgOut]
 
 
 class CommandHistoryOut(BaseModel):
@@ -191,6 +203,7 @@ class CommandHistoryOut(BaseModel):
 class SendCommandIn(BaseModel):
     confirm: bool = False
     payload_hex: str | None = None
+    args: dict[str, str | float | int] | None = None
 
 
 class SendRawIn(BaseModel):

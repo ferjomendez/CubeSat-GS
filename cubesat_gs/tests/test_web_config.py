@@ -23,7 +23,7 @@ async def test_get_config_hides_secrets_and_marks_writable(cfg_stack):
     r = await client.get("/api/config")
     body = r.json()
     assert "mongo_uri" not in body["config"]["database"]
-    assert body["config"]["frequencies"] == {"tctm": 435.5, "beacon": 437.25}
+    assert body["config"]["frequencies"] == {"tctm": 435.5, "beacon": 437.25, "uplink": None}
     assert set(body["writable"]) == {"serial", "frequencies", "station", "satellite", "passes", "commands"}
     assert body["applies"]["frequencies.tctm"] == "live" and body["applies"]["serial.baudrate"] == "restart"
 

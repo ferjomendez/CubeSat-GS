@@ -56,7 +56,10 @@ async def run(args: argparse.Namespace) -> int:
     sim_server = None
     if args.sim:
         from cubesat_gs.tests.serial_simulator import ModemSimulator, serve_tcp
-        sim = ModemSimulator(beacon_interval=args.sim_beacon_interval, fake_rssi=args.sim_rssi)
+        sim = ModemSimulator(beacon_interval=args.sim_beacon_interval, fake_rssi=args.sim_rssi,
+                             length_includes_crc=cfg.ccsds.length_includes_crc,
+                             sequence_scope=cfg.ccsds.sequence_scope,  # type: ignore[arg-type]
+                             tctm_mhz=cfg.frequencies.tctm, beacon_mhz=cfg.frequencies.beacon)
         sim_server, port = await serve_tcp(sim, "127.0.0.1", 0)
         cfg.serial.port = f"socket://127.0.0.1:{port}"
         log.info("simulator: modem simulator listening on %s", cfg.serial.port)

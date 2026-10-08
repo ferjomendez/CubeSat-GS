@@ -1,9 +1,89 @@
-# Telecommand registry. payload: UTF-8 string, or hex prefixed with 0x (e.g. "0x01FF").
+# Telecommand registry.
+#
+# cFS commands (UAI OBC, github.com/vaquitson/uai_obc): set msg_id (cFE MsgId, 0x0000-0x1FFF) and
+# function_code. The GS builds the CFE_MSG_CommandHeader_t (primary header + function code + checksum)
+# and appends the encoded `args` (little-endian, in order). Arg types: string/freq (fixed char[length],
+# NUL padded, max length-1 chars), uint8..int64, float32, float64. freq: number in MHz written as text
+# with `decimals` digits and `decimal_sep` (default ","). optional: true lets a string/freq be empty.
+# retune: after TX the GS follows the satellite to the new downlink (RX) / uplink (TX) frequencies.
+#
+# Legacy commands (OBC_sim.py): apid + payload (UTF-8 string, or hex prefixed with 0x).
+#
 # response_apid: APID expected in reply (null = fire-and-forget, completes on modem TX ack).
 # critical: true requires confirm=True from the caller (dashboard shows a confirmation dialog).
 commands:
+  # ---- TELECOM app (mision_doc/functionality.md)
+  - name: TELECOM_OPEN_TLM
+    description: "Open the telemetry downlink. The OBC answers TELECOM_OPEN_TLM_MID (status_code). No telemetry is downlinked before this."
+    msg_id: 0x187A          # TELECOM_CMD_MID
+    function_code: 2        # TELECOM_OPEN_TLM_CC
+    args:
+      - {name: downlink_freq, type: freq, length: 16, default: 435.5,
+         description: "MHz the CubeSat transmits telemetry on"}
+      - {name: uplink_freq, type: freq, length: 16, default: 435.5, optional: true,
+         description: "MHz the CubeSat listens for commands on (empty = unchanged)"}
+    retune: {downlink: downlink_freq, uplink: uplink_freq}
+    response_apid: 125      # TELECOM_OPEN_TLM_MID
+    timeout: 10
+    critical: false
+
+  - name: TELECOM_SEND_HK
+    description: "Request Telecom housekeeping (TELECOM_HK_TLM_MID). Needs the downlink open."
+    msg_id: 123             # TELECOM_SEND_HK_MID (the OBC dispatches on this MID; TELECOM_SEND_HK_CC is not defined yet)
+    response_apid: 124      # TELECOM_HK_TLM_MID
+    timeout: 10
+    critical: false
+
+  - name: TELECOM_NOOP
+    description: "Telecom no-op. Only raises an OBC event (not downlinked), so it completes on TX."
+    msg_id: 0x187A          # TELECOM_CMD_MID
+    function_code: 1        # TELECOM_NOOP_CMD
+    response_apid: null
+    critical: false
+
+  # ---- OBC_HK app (forwarded to the satellite bus by TELECOM; not in functionality.md yet)
+  - name: OBC_HK_SEND_HK
+    description: "OBC_HK housekeeping counters (OBC_HK_HK_MID)"
+    msg_id: 101             # OBC_HK_SEND_HK_MID
+    response_apid: 102
+    timeout: 10
+    critical: false
+
+  - name: OBC_HK_SEND_OBC_INFO
+    description: "CPU temperature, RAM and CPU usage (OBC_HK_OBC_INFO_MID)"
+    msg_id: 100             # OBC_HK_CMD_MID
+    function_code: 104      # OBC_HK_SEND_OBC_INFO_CC
+    response_apid: 103
+    timeout: 10
+    critical: false
+
+  - name: OBC_HK_SEND_CPU_TEMP
+    description: "CPU temperature (OBC_HK_CPU_TEMP_MID)"
+    msg_id: 100
+    function_code: 105
+    response_apid: 104
+    timeout: 10
+    critical: false
+
+  - name: OBC_HK_SEND_RAM_USAGE
+    description: "RAM usage (OBC_HK_RAM_USAGE_MID)"
+    msg_id: 100
+    function_code: 106
+    response_apid: 105
+    timeout: 10
+    critical: false
+
+  - name: OBC_HK_SEND_CPU_USAGE
+    description: "CPU usage (OBC_HK_CPU_USAGE_MID)"
+    msg_id: 100
+    function_code: 107
+    response_apid: 106
+    timeout: 10
+    critical: false
+
+  # ---- legacy OBC_sim.py (cubesat_comms-main); the cFS OBC does not implement it
   - name: PING
-    description: "Liveness check; satellite answers PONG_DATA_<value> on APID 101"
+    description: "Legacy OBC_sim.py liveness check; answers PONG_DATA_<value> on APID 101"
     apid: 100
     payload: "PING"
     response_apid: 101

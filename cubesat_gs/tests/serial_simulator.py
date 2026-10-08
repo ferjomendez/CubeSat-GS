@@ -1,4 +1,7 @@
-"""Simulates the ESP32 LoRa modem + OBC_sim.py from the serial side.
+"""Simulates the ESP32 LoRa modem + the satellite from the serial side.
+
+Satellite side: legacy OBC_sim.py (PING/PONG, beacons) and the cFS OBC TELECOM/OBC_HK apps
+(github.com/vaquitson/uai_obc) as described in its mision_doc/functionality.md.
 
 Usable in-process (SimulatedSerial) or as a TCP server (see main() — added in Task 14)
 so the GS can connect with serial.port = "socket://localhost:<port>".
@@ -7,14 +10,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import struct
 from typing import Literal
 
-from cubesat_gs.core import ccsds
+from cubesat_gs.core import ccsds, cfs
 
 log = logging.getLogger(__name__)
 
 BEACON_PAYLOAD = b"VLEO_BEACON_SYS_NOMINAL"
 PONG_PAYLOAD = b"PONG_DATA_6.28"
+
+# cFS OBC message ids / function codes (uai_obc apps/*/config)
+TELECOM_CMD_MID, TELECOM_SEND_HK_MID = 0x187A, 123
+TELECOM_HK_TLM_MID, TELECOM_OPEN_TLM_MID = 124, 125
+TELECOM_OPEN_TLM_CC = 2
+OBC_HK_CMD_MID, OBC_HK_SEND_HK_MID, OBC_HK_HK_MID = 100, 101, 102
+OBC_HK_REPLIES = {  # function code -> (tlm MsgId, little-endian payload)
+    104: (103, struct.pack("<ffif", 47.5, 31.25, 262144, 12.5)),
+    105: (104, struct.pack("<f", 47.5)),
+    106: (105, struct.pack("<fi", 31.25, 262144)),
+    107: (106, struct.pack("<f", 12.5)),
+}
 
 
 class ModemSimulator:
@@ -30,6 +46,13 @@ class ModemSimulator:
 
         self.freq: float = tctm_mhz
         self.received_tx: list[bytes] = []
+        # cFS OBC radio state: listens on uplink, downlinks only after TELECOM_OPEN_TLM
+        self.obc_uplink_mhz: float = tctm_mhz
+        self.obc_downlink_mhz: float = tctm_mhz
+        self.obc_downlink_on = False
+        self.obc_cmd_counter = 0
+        self.obc_time = 1000
+        self._cfs_counters: dict[int, int] = {}
         self.beacons_sent = 0
         self.silent = False  # when True, the modem emits nothing (dead/failing modem)
         self._counters: dict[int | None, int] = {}
@@ -63,6 +86,8 @@ class ModemSimulator:
                 self.received_tx.append(raw)
                 if self.freq == self.tctm_mhz and b"PING" in raw[ccsds.HEADER_LEN:]:
                     self._spawn(self._reply_pong())
+                elif self.freq == self.obc_uplink_mhz:
+                    self._cfs_uplink(raw)
             self._emit("OK:TX_DONE")
         elif line.startswith("FREQ:"):
             try:
@@ -102,6 +127,48 @@ class ModemSimulator:
         return ccsds.build(apid, payload, sequence_count=seq, packet_type=0,
                            length_includes_crc=self.length_includes_crc)
 
+    # ---- cFS OBC
+    def _cfs_uplink(self, raw: bytes) -> None:
+        if len(raw) < 8 or cfs.checksum(raw) != 0:
+            return
+        msg_id, fc, body = int.from_bytes(raw[0:2], "big"), raw[6] & 0x7F, raw[8:]
+        if msg_id == TELECOM_CMD_MID and fc == TELECOM_OPEN_TLM_CC and len(body) >= 32:
+            self.obc_cmd_counter += 1
+            down, up = _c_str(body[0:16]), _c_str(body[16:32])
+            try:
+                self.obc_downlink_mhz = cfs.parse_freq(down)
+                if up:
+                    self.obc_uplink_mhz = cfs.parse_freq(up)
+                status = 0
+            except ValueError:
+                status = 1
+            self.obc_downlink_on = True
+            self._spawn(self._downlink(TELECOM_OPEN_TLM_MID, struct.pack("<I", status)))
+        elif msg_id == TELECOM_SEND_HK_MID:
+            self.obc_cmd_counter += 1
+            payload = bytes([0, self.obc_cmd_counter & 0xFF]) + _c_freq(self.obc_downlink_mhz) +                 _c_freq(self.obc_uplink_mhz)
+            self._spawn(self._downlink(TELECOM_HK_TLM_MID, payload))
+        elif msg_id == OBC_HK_SEND_HK_MID:
+            self._spawn(self._downlink(OBC_HK_HK_MID, bytes([self.obc_cmd_counter & 0xFF, 0])))
+        elif msg_id == OBC_HK_CMD_MID and fc in OBC_HK_REPLIES:
+            self._spawn(self._downlink(*OBC_HK_REPLIES[fc]))
+
+    def cfs_tlm(self, msg_id: int, payload: bytes) -> bytes:
+        """A cFE telemetry packet: primary header + time + spare + payload, standard length, per-MID seq."""
+        self.obc_time += 1
+        seq = self._cfs_counters.get(msg_id, 0)
+        self._cfs_counters[msg_id] = (seq + 1) & 0x3FFF
+        ptype, sec, apid = cfs.split_msg_id(msg_id)
+        body = struct.pack(">IH", self.obc_time, 0x8000) + bytes(4) + payload
+        return ccsds.build(apid, body, sequence_count=seq, packet_type=ptype, sec_header_flag=sec,
+                           length_includes_crc=False)
+
+    async def _downlink(self, msg_id: int, payload: bytes) -> None:
+        await asyncio.sleep(0.05)
+        # heard only when downlink is open and the GS modem listens on the OBC's downlink frequency
+        if self.obc_downlink_on and self.freq == self.obc_downlink_mhz:
+            self.inject_rx(self.cfs_tlm(msg_id, payload))
+
     async def _reply_pong(self) -> None:
         await asyncio.sleep(0.05)
         self.inject_rx(self._build(ccsds.APID_TM_RESPONSE, PONG_PAYLOAD))
@@ -116,6 +183,14 @@ class ModemSimulator:
         t = asyncio.create_task(coro)
         self._pending.add(t)
         t.add_done_callback(self._pending.discard)
+
+
+def _c_str(b: bytes) -> str:
+    return b.split(b"\x00", 1)[0].decode("ascii", errors="replace")
+
+
+def _c_freq(mhz: float) -> bytes:
+    return f"{mhz:.3f}".replace(".", ",").encode().ljust(16, b"\x00")
 
 
 class SimulatedWriter:

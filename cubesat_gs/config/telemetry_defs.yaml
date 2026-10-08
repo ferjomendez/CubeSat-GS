@@ -1,8 +1,75 @@
-# Telemetry field definitions per APID. Big-endian. Key format: apid_<decimal>.
-# Types: uint8 int8 uint16 int16 uint32 int32 float32 string bytes
-# string/bytes: optional `length` (omit = rest of payload). string: optional `encoding` (default utf-8).
+# Telemetry field definitions per APID. Key format: apid_<decimal>.
+# Per APID: byte_order big (default) | little; secondary_header none (default) | cfs_tlm
+#   (cfs_tlm skips the 10-byte cFE telemetry secondary header: 6 bytes time + 4 spare).
+# Types: uint8 int8 uint16 int16 uint32 int32 uint64 int64 float32 float64 string bytes pad
+# string/bytes: optional `length` (omit = rest of payload); a fixed-length string stops at the first NUL.
+# string: optional `encoding` (default utf-8). pad: `length` bytes skipped (C struct padding).
 # numeric: optional `scale` (default 1), `offset` (default 0), `unit`, `alarm_low`, `alarm_high`.
+#
+# cFS layouts follow the UAI OBC (github.com/vaquitson/uai_obc), built for i686-linux-gnu
+# (sample_defs/targets.cmake): little-endian, `long int` = 4 bytes, no padding in these structs.
+# If the OBC moves to a 64-bit target, `long int` becomes int64 and needs a 4-byte pad before it.
 
+# ---- TELECOM app (mision_doc/functionality.md)
+apid_124:
+  name: "TELECOM HK"          # TELECOM_HK_TLM_MID, LoRa implementation
+  byte_order: little
+  secondary_header: cfs_tlm
+  fields:
+    - {name: err_counter, type: uint8}
+    - {name: cmd_counter, type: uint8}
+    - {name: downlink_freq, type: string, length: 16, encoding: ascii}
+    - {name: uplink_freq, type: string, length: 16, encoding: ascii}
+
+apid_125:
+  name: "TELECOM Open TLM"    # TELECOM_OPEN_TLM_MID
+  byte_order: little
+  secondary_header: cfs_tlm
+  fields:
+    - {name: status_code, type: uint32}
+
+# ---- OBC_HK app (default_obc_hk_msgdefs.h)
+apid_102:
+  name: "OBC_HK HK"
+  byte_order: little
+  secondary_header: cfs_tlm
+  fields:
+    - {name: cmd_counter, type: uint8}
+    - {name: err_counter, type: uint8}
+
+apid_103:
+  name: "OBC Info"
+  byte_order: little
+  secondary_header: cfs_tlm
+  fields:
+    - {name: cpu_temp, type: float32, unit: "°C"}
+    - {name: ram_usage_percent, type: float32, unit: "%"}
+    - {name: ram_usage, type: int32}
+    - {name: cpu_usage, type: float32, unit: "%"}
+
+apid_104:
+  name: "OBC CPU Temp"
+  byte_order: little
+  secondary_header: cfs_tlm
+  fields:
+    - {name: cpu_temp, type: float32, unit: "°C"}
+
+apid_105:
+  name: "OBC RAM Usage"
+  byte_order: little
+  secondary_header: cfs_tlm
+  fields:
+    - {name: ram_usage_percent, type: float32, unit: "%"}
+    - {name: ram_usage, type: int32}
+
+apid_106:
+  name: "OBC CPU Usage"
+  byte_order: little
+  secondary_header: cfs_tlm
+  fields:
+    - {name: cpu_usage, type: float32, unit: "%"}
+
+# ---- legacy OBC_sim.py (cubesat_comms-main)
 apid_10:
   name: "Beacon"
   fields:
@@ -16,19 +83,3 @@ apid_101:
     - name: "response_data"
       type: "string"
       encoding: "utf-8"
-
-# Future structured example (uncomment and adapt when the EPS subsystem defines its packet):
-# apid_50:
-#   name: "EPS Telemetry"
-#   fields:
-#     - name: "battery_voltage"
-#       type: "float32"
-#       unit: "V"
-#       alarm_low: 3.3
-#       alarm_high: 4.2
-#     - name: "battery_temp"
-#       type: "int16"
-#       scale: 0.1
-#       unit: "°C"
-#       alarm_low: -10
-#       alarm_high: 50

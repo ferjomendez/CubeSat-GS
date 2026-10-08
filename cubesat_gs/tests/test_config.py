@@ -15,8 +15,9 @@ def test_load_default_config():
     assert cfg.serial.timeouts.tx == 5.0
     assert cfg.frequencies.tctm == 435.5
     assert cfg.frequencies.beacon == 437.25
-    assert cfg.ccsds.length_includes_crc is True
-    assert cfg.ccsds.sequence_scope == "global"
+    assert cfg.frequencies.uplink is None
+    assert cfg.ccsds.length_includes_crc is False  # cFS OBC framing
+    assert cfg.ccsds.sequence_scope == "per_apid"
     assert cfg.commands.max_retries == 3
     assert cfg.database.db_name == "cubesat_gs"
 
